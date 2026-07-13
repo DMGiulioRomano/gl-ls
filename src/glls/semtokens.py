@@ -1,9 +1,10 @@
 """Token semantici: la struttura del linguaggio sopra l'highlight YAML.
 
-Classi: sezioni riservate (keyword), nomi d'asse (type), nomi di stream
-(class), chiavi engine (property), marcatori di generatore/banda (macro),
-valori enum (enumMember), path puntati (property), contenuto dei nodi-expr
-tokenizzato (variable/operator/number).
+Classi: sezioni axes/stack/base (struct), sezione streams (namespace),
+chiave spread (decorator), altre chiavi radice (keyword), nomi d'asse
+(type), nomi di stream (class), chiavi engine (property), marcatori di
+generatore/banda (macro), valori enum (enumMember), path puntati
+(property), contenuto dei nodi-expr tokenizzato (variable/operator/number).
 """
 from __future__ import annotations
 
@@ -26,6 +27,9 @@ TOKEN_TYPES = [
     "operator",    # 7: operatori dentro expr
     "number",      # 8: numeri dentro expr
     "string",      # 9: espressione expr (fallback)
+    "struct",      # 10: sezioni axes/stack/base
+    "namespace",   # 11: sezione streams
+    "decorator",   # 12: chiave spread
 ]
 _T = {name: i for i, name in enumerate(TOKEN_TYPES)}
 
@@ -39,7 +43,15 @@ _EXPR_TOKEN = re.compile(r"(?P<num>\d+(?:\.\d+)?)|(?P<name>[A-Za-z_]\w*)|(?P<op>
 
 
 def _classify_key(path, ctx: str, name: str) -> Optional[int]:
-    if ctx == "root" or ctx == "stream_override" or name in ("spread", "over"):
+    if name == "spread":
+        return _T["decorator"]
+    if ctx == "root":
+        if name in ("axes", "stack", "base"):
+            return _T["struct"]
+        if name == "streams":
+            return _T["namespace"]
+        return _T["keyword"]
+    if ctx == "stream_override" or name == "over":
         return _T["keyword"]
     if ctx == "axes" and name not in AXES_RESERVED:
         return _T["type"]
