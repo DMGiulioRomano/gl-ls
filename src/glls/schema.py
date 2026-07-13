@@ -142,6 +142,7 @@ _ENGINE_STREAM_KEYS = [
     _k("range_always_active", "true: i `_range` sono sempre attivi anche senza dephase."),
     _k("voices", "Multi-voice: num_voices, scatter, pitch, onset_offset, "
                  "pointer, pan (strategy per dimensione)."),
+    _k("seed", "Seed per-stream (override del seed globale engine)."),
     _k("solo", "Solo gli stream con questo flag vengono renderizzati."),
     _k("mute", "Stream ignorato (salvo solo mode). In stack e' il gate "
                "d'ascolto: si esclude uno stream mutandolo col volume."),
@@ -363,6 +364,8 @@ _ENGINE_ENV_KEYS = [
     _k("time_mode", "Override locale: absolute (secondi) | normalized ([0,1] "
                     "su duration).", values=EI.TIME_MODES),
     _k("time_unit", "Alias locale di time_mode.", values=EI.TIME_MODES),
+    _k("expr", _GEN_DOC["expr"], kind="macro"),
+    _k("let", _GEN_DOC["let"], kind="macro"),
 ]
 
 CONTEXTS: Dict[str, List[Key]] = {
@@ -427,6 +430,8 @@ _GEN_MARKERS = {"values", "ramp", "base"}
 def _engine_context(rest: KeyPath) -> str:
     if not rest:
         return "engine_stream"
+    if "let" in rest:
+        return "let"  # i nomi dichiarati in let sono liberi
     head = rest[0]
     table: Dict[object, str] = {
         "grain": "grain", "pointer": "pointer", "pitch": "pitch",

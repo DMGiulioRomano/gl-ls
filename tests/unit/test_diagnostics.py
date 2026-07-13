@@ -251,3 +251,17 @@ def test_loop_end_before_start():
         "base:\n  pointer:\n    loop_start: 3\n    loop_end: 1\n",
     )
     assert "loop-order" in codes(text)
+
+
+def test_expr_node_in_static_base_param_is_clean():
+    # expr/let valgono anche nei parametri statici dello stream (base.*)
+    text = BASE.replace(
+        "base:\n",
+        'base:\n  volume:\n    expr: "v - 1"\n    let: {v: -19}\n',
+    )
+    assert not any(d.code == "unknown-key" for d in diags_of(text))
+
+
+def test_stream_level_seed_in_base_is_known():
+    text = BASE.replace("base:\n", "base:\n  seed: 256\n")
+    assert "unknown-key" not in codes(text)
