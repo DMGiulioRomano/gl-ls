@@ -53,6 +53,11 @@ def _is_num(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def as_num(v: Any) -> Optional[float]:
+    """Il valore come float, o None se non e' un numero (bool escluso)."""
+    return float(v) if _is_num(v) else None
+
+
 def env_points(form: Any) -> Optional[List[Tuple[float, float]]]:
     """Breakpoint ``[(t, v), ...]`` di una forma *statica* di Env.
 

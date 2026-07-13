@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from lsprotocol import types
 
 from . import engine_info as EI
+from .convert import as_num as _num
 from . import exprlang, schema
 from .model import (
     AXES_RESERVED,
@@ -124,9 +125,6 @@ def _check_root(bag: Bag, doc: Document, m: StudyModel) -> None:
                 types.DiagnosticSeverity.Warning, code="no-axes")
 
 
-def _num(v: Any) -> Optional[float]:
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
-
 
 def _check_bounds_value(
     bag: Bag, path: KeyPath, engine_path: str, v: Any, label: str
@@ -173,7 +171,8 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
                     code="axis-no-path")
         else:
             p = cfg.get("path")
-            if isinstance(p, str) and p not in EI.PARAMS and not p.startswith("pitch"):
+            if (isinstance(p, str) and p not in EI.PARAMS
+                    and p != "pitch" and not p.startswith("pitch.")):
                 sug = _suggest(p, EI.AXIS_PATHS)
                 extra = f" Forse intendevi '{sug}'?" if sug else ""
                 bag.add(apath + ("path",),
@@ -773,19 +772,22 @@ def _check_expr_nodes(bag: Bag, doc: Document, m: StudyModel) -> None:
         value = doc.get(entry.path)
         if not exprlang.is_expr_node(value):
             continue
-        in_spread = "spread" in entry.path
+        # dentro un blocco spread solo se il path e' streams.<nome>.spread...
+        spread_stream = (
+            str(entry.path[1])
+            if (len(entry.path) > 2 and entry.path[0] == "streams"
+                and entry.path[2] == "spread")
+            else None
+        )
         try:
             text, let = exprlang.parse_expr_node(value)
         except ValueError as e:
             bag.add(entry.path, str(e), code="expr", prefer_value=False)
             continue
         scope = dict(let)
-        if in_spread:
-            n = 2
-            for si in m.streams.values():
-                if si.is_spread and si.spread_n:
-                    n = si.spread_n
-                    break
+        if spread_stream is not None:
+            si = m.streams.get(spread_stream)
+            n = si.spread_n if si and si.is_spread and si.spread_n else 2
             scope.setdefault("i", 0)
             scope.setdefault("n", n)
             if "i" in let or "n" in let:

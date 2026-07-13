@@ -508,6 +508,4 @@ def context_for_path(path: KeyPath) -> str:
         if len(path) == 2:
             return "value" if path[1] in ("seed", "unit") else "walk"
         return _env_context(path[2:])
-    if head == "streams":
-        return "streams"
     return "value" if len(path) > 1 else "root"

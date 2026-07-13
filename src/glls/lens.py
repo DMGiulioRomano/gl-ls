@@ -12,13 +12,10 @@ from typing import Any, List, Optional
 from lsprotocol import types
 
 from . import engine_info as EI
-from .convert import env_eval, env_points, fmt_num
+from .convert import as_num as _num, env_eval, env_points, fmt_num
 from .model import StudyModel
 from .yamlpos import Document, KeyPath
 
-
-def _num(v: Any) -> Optional[float]:
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
 def _lens(doc: Document, path: KeyPath, title: str) -> Optional[types.CodeLens]:

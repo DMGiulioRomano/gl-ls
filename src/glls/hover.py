@@ -13,7 +13,7 @@ from lsprotocol import types
 
 from . import engine_info as EI
 from . import schema
-from .convert import fmt_num
+from .convert import as_num as _num, fmt_num
 from .model import AXES_RESERVED, STACK_RESERVED, StudyModel
 from .yamlpos import Document, KeyPath
 
@@ -24,9 +24,6 @@ def _md(value: str, rng: Optional[types.Range] = None) -> types.Hover:
         range=rng,
     )
 
-
-def _num(v: Any) -> Optional[float]:
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
 def _bounds_line(dotted: str) -> str:

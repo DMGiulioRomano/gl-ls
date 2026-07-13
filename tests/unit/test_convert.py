@@ -110,3 +110,17 @@ def test_generator_node_rejected():
 
 def test_same_unit_noop():
     assert convert_band(5, 1, "hz", "hz") == (5, 1)
+
+
+def test_expr_pow_bomb_rejected():
+    import pytest
+    from glls import exprlang
+
+    with pytest.raises(ValueError):
+        exprlang.eval_expr("10**10**10", {})
+
+
+def test_expr_pow_normal_ok():
+    from glls import exprlang
+
+    assert exprlang.eval_expr("2**10", {}) == 1024

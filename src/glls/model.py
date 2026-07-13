@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from .convert import as_num as _num
 from .yamlpos import Document, KeyPath
 
 AXES_RESERVED = ("interpolation", "seed")
@@ -90,9 +91,6 @@ class StudyModel:
                 counts[o] = comb(n, o)
         return counts or None
 
-
-def _num(v: Any) -> Optional[float]:
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
 def ramp_count(cfg: Dict[str, Any]) -> Optional[int]:

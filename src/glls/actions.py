@@ -16,7 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from lsprotocol import types
 
 from . import engine_info as EI
-from .convert import ConversionError, convert_band, fmt_num, yaml_flow
+from .convert import (ConversionError, as_num as _num, convert_band,
+                      fmt_num, yaml_flow)
 from .model import STACK_RESERVED, StudyModel
 from .yamlpos import Document, Entry, KeyPath, Span
 
@@ -116,8 +117,8 @@ def _convert_walk_edits(doc: Document, epath: KeyPath, cfg: Dict[str, Any],
         edits.append(_edit(range_entry.value_span, yaml_flow(new_range)))
     elif range_entry is None and new_range is not None:
         indent = " " * (base_entry.key_span.start_col if base_entry.key_span else 0)
-        edits.append(_insert(base_entry.value_span.end_line + 1, 0,
-                             f"{indent}range: {yaml_flow(new_range)}\n"))
+        line, _ = _block_end(base_entry)
+        edits.append(_insert(line, 0, f"{indent}range: {yaml_flow(new_range)}\n"))
 
     unit_entry = doc.entry(epath + ("unit",))
     if unit_entry is not None:
@@ -194,9 +195,6 @@ def _scale_env_list(doc: Document, path: KeyPath, value: list,
     return edits
 
 
-def _num(v: Any) -> Optional[float]:
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
-
 
 def duration_actions(doc: Document, m: StudyModel, uri: str, rng: types.Range,
                      pending: Dict[str, Tuple[float, float]]
@@ -220,7 +218,8 @@ def duration_actions(doc: Document, m: StudyModel, uri: str, rng: types.Range,
         edits: List[types.TextEdit] = []
         for base_root in _base_roots(doc):
             edits.extend(_envelope_time_edits(doc, base_root, factor,
-                                              m.time_mode))
+                                              _root_time_mode(doc, base_root,
+                                                              m.time_mode)))
         if not edits:
             continue
         out.append(_action(
@@ -229,6 +228,12 @@ def duration_actions(doc: Document, m: StudyModel, uri: str, rng: types.Range,
             uri, edits, types.CodeActionKind.RefactorRewrite,
         ))
     return out
+
+
+def _root_time_mode(doc: Document, root: KeyPath, default: str) -> str:
+    """time_mode effettivo di un blocco base (l'override per-stream vince)."""
+    tm = doc.get(root + ("time_mode",))
+    return tm if tm in ("absolute", "normalized") else default
 
 
 def _base_roots(doc: Document) -> List[KeyPath]:

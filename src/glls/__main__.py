@@ -5,19 +5,27 @@ import argparse
 import sys
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="glls",
         description="gl-ls: language server per il linguaggio di granulazione "
                     "(study.yml).",
     )
+    # convenzione LSP: molti client (es. vscode-languageclient) passano
+    # --stdio esplicito; e' gia' il default, va solo accettato.
+    parser.add_argument("--stdio", action="store_true",
+                        help="comunica su stdio (default)")
     parser.add_argument("--tcp", action="store_true",
                         help="ascolta su TCP invece che stdio (debug)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8791)
     parser.add_argument("--version", action="store_true",
                         help="stampa la versione ed esce")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
 
     from . import __version__
 

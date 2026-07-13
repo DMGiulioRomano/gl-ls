@@ -1,0 +1,13 @@
+study_id: ci-smoke
+duration: 20
+base:
+  onset: 0
+  duration: 6
+  sample: corpus.wav
+axes:
+  density:
+    path: density
+    baseline: 20
+# errore voluto: l'asse non ha generatore (values/ramp/banda) -> il server
+# deve pubblicare almeno una diagnostica 'no-generator'. I client smoke test
+# considerano riuscita l'integrazione quando la ricevono.
