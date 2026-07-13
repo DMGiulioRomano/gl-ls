@@ -13,15 +13,12 @@ from typing import Any, List, Optional
 from lsprotocol import types
 
 from . import engine_info as EI
-from .convert import fmt_num
+from .convert import as_num as _num, fmt_num
 from .model import STACK_RESERVED, StudyModel
 from .yamlpos import Document, KeyPath
 
 MAX_HINTS = 60
 
-
-def _num(v: Any) -> Optional[float]:
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
 def _hint(line: int, col: int, label: str) -> types.InlayHint:

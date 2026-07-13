@@ -265,3 +265,45 @@ def test_expr_node_in_static_base_param_is_clean():
 def test_stream_level_seed_in_base_is_known():
     text = BASE.replace("base:\n", "base:\n  seed: 256\n")
     assert "unknown-key" not in codes(text)
+
+
+def test_expr_in_spread_uses_containing_stream_n():
+    # due entry-spread: l'expr vive nella seconda (n=5); 1/(n-5) deve dare
+    # divisione per zero con n=5, non passare pulito con la n=3 della prima.
+    text = BASE + """streams:
+  primo:
+    spread:
+      n: 3
+      over:
+        base.onset:
+          ramp: {start: 0, step: 2}
+  secondo:
+    spread:
+      n: 5
+      over:
+        base.onset:
+          expr: "1/(n-5)"
+"""
+    assert "expr" in codes(text)
+
+
+def test_expr_outside_spread_not_marked_as_spread():
+    # uno stream chiamato 'spread' non deve attivare lo scope i/n riservato
+    text = BASE + """streams:
+  spread:
+    base:
+      volume:
+        expr: "i * 2"
+"""
+    # fuori da un vero blocco spread, 'i' e' un nome ignoto -> errore expr
+    assert "expr" in codes(text)
+
+
+def test_unknown_pitch_like_path_warns():
+    text = BASE.replace("path: density", "path: pitchfoo")
+    assert "unknown-path" in codes(text)
+
+
+def test_pitch_dotted_path_is_known():
+    text = BASE.replace("path: density", "path: pitch.semitones")
+    assert "unknown-path" not in codes(text)

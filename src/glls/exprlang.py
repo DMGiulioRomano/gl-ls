@@ -11,12 +11,25 @@ import ast
 import operator
 from typing import Any, Dict, Mapping, Tuple
 
+_MAX_POW_EXP = 128
+_MAX_POW_BASE = 1e9
+
+
+def _safe_pow(base: Any, exp: Any) -> Any:
+    if abs(exp) > _MAX_POW_EXP or abs(base) > _MAX_POW_BASE:
+        raise ValueError(
+            f"expr: potenza fuori scala ({base!r} ** {exp!r}) — esponente "
+            f"massimo {_MAX_POW_EXP}, base massima {_MAX_POW_BASE:g}."
+        )
+    return operator.pow(base, exp)
+
+
 _BINOPS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
     ast.Div: operator.truediv,
-    ast.Pow: operator.pow,
+    ast.Pow: _safe_pow,
 }
 
 _NODE_KEYS = frozenset({"expr", "let"})

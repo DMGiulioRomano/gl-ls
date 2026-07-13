@@ -113,9 +113,7 @@ def did_close(ls: GllsServer, params: types.DidCloseTextDocumentParams) -> None:
 def completion(ls: GllsServer, params: types.CompletionParams
                ) -> List[types.CompletionItem]:
     uri = params.text_document.uri
-    td = ls.workspace.get_text_document(uri)
-    doc = yamlpos.parse(td.source)
-    m = model_mod.build(doc)
+    doc, m = ls.doc_of(uri)
     file_dir = None
     if uri.startswith("file://"):
         file_dir = os.path.dirname(url2pathname(uri[len("file://"):]))
