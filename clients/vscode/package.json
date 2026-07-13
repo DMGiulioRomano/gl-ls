@@ -1,0 +1,53 @@
+{
+  "name": "gl-ls-vscode",
+  "displayName": "gl-ls — Granulation Language Server",
+  "description": "Language server per gli study.yml di granulation-studies: diagnostica, completamento, hover, ricalcoli hz/s/bpm e duration.",
+  "version": "0.1.0",
+  "publisher": "dmgiulioromano",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DMGiulioRomano/gl-ls"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages", "Linters"],
+  "activationEvents": [
+    "workspaceContains:**/study.yml",
+    "onLanguage:yaml"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "gl-ls",
+      "properties": {
+        "glls.serverPath": {
+          "type": "string",
+          "default": "glls",
+          "description": "Percorso dell'eseguibile glls (es. /path/al/repo/gl-ls/.venv/bin/glls)."
+        },
+        "glls.filePattern": {
+          "type": "string",
+          "default": "**/study.yml",
+          "description": "Glob dei documenti serviti dal language server."
+        },
+        "glls.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Log della comunicazione LSP."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^2.24.0"
+  }
+}
