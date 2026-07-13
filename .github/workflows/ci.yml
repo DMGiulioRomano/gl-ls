@@ -1,0 +1,114 @@
+# CI di gl-ls: suite del server + integrazione di OGNI client editor.
+#
+# - server:        unit + e2e (protocollo LSP su subprocess) su piu' Python
+# - client-vscode: packaging .vsix + VS Code vero (headless) che apre uno
+#                  study.yml e riceve le diagnostiche dal server
+# - client-nvim:   Neovim headless che carica clients/nvim/glls.lua e
+#                  riceve le diagnostiche sulla fixture
+# - client-pulsar: il package carica con atom stubbato, avvia glls via
+#                  startServerProcess() e completa l'handshake LSP
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  server:
+    name: server (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Installa gl-ls
+        run: pip install -e ".[dev]"
+      - name: Test (unit + e2e)
+        run: python -m pytest tests -q
+
+  client-vscode:
+    name: client VS Code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Installa gl-ls
+        run: |
+          pip install -e .
+          echo "GLLS_BIN=$(which glls)" >> "$GITHUB_ENV"
+      - name: Dipendenze estensione
+        working-directory: clients/vscode
+        run: |
+          npm install
+          node --check extension.js
+      - name: Packaging .vsix
+        working-directory: clients/vscode
+        run: npx @vscode/vsce package
+      - name: Dipendenze harness di test
+        working-directory: ci/vscode-test
+        run: npm install
+      - name: Integrazione VS Code headless
+        run: xvfb-run -a node ci/vscode-test/runTests.js
+      - name: Artefatto .vsix
+        uses: actions/upload-artifact@v4
+        with:
+          name: gl-ls-vscode-vsix
+          path: clients/vscode/*.vsix
+          if-no-files-found: error
+
+  client-nvim:
+    name: client Neovim
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Installa gl-ls
+        run: pip install -e .
+      - name: Installa Neovim (stable)
+        run: |
+          curl -fsSL -o /tmp/nvim.tar.gz \
+            https://github.com/neovim/neovim/releases/download/stable/nvim-linux-x86_64.tar.gz
+          tar -C /opt -xzf /tmp/nvim.tar.gz
+          echo "/opt/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+      - name: Integrazione Neovim headless
+        env:
+          GLLS_FIXTURE: ci/fixtures/study.yml
+        run: |
+          nvim --version | head -1
+          nvim --headless -u NONE +"luafile ci/nvim/smoke.lua"
+
+  client-pulsar:
+    name: client Pulsar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Installa gl-ls
+        run: |
+          pip install -e .
+          echo "GLLS_BIN=$(which glls)" >> "$GITHUB_ENV"
+      - name: Dipendenze package
+        working-directory: clients/pulsar
+        run: |
+          npm install
+          node --check src/main.js
+      - name: "Smoke: load package + handshake LSP"
+        run: node ci/pulsar/smoke.js

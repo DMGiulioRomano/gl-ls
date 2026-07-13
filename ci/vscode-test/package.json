@@ -1,0 +1,12 @@
+{
+  "name": "glls-vscode-integration",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Harness di integrazione: avvia VS Code headless con l'estensione gl-ls e verifica le diagnostiche su uno study.yml",
+  "scripts": {
+    "test": "node runTests.js"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "^2.4.1"
+  }
+}
