@@ -2,16 +2,17 @@ VENV := .venv
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: help venv install tests unit-tests e2e-tests run clean
+.PHONY: help venv install install-nvim tests unit-tests e2e-tests run clean
 
 help:
 	@echo "Target disponibili:"
-	@echo "  make install     - crea il venv e installa gl-ls in editable (+dev)"
-	@echo "  make tests       - tutta la suite (unit + e2e)"
-	@echo "  make unit-tests  - solo unit test"
-	@echo "  make e2e-tests   - solo e2e (protocollo LSP su subprocess)"
-	@echo "  make run         - avvia il server su stdio (debug)"
-	@echo "  make clean       - rimuove venv e artefatti"
+	@echo "  make install      - crea il venv e installa gl-ls in editable (+dev)"
+	@echo "  make install-nvim - installa anche il client Neovim (clients/nvim/install.sh)"
+	@echo "  make tests        - tutta la suite (unit + e2e)"
+	@echo "  make unit-tests   - solo unit test"
+	@echo "  make e2e-tests    - solo e2e (protocollo LSP su subprocess)"
+	@echo "  make run          - avvia il server su stdio (debug)"
+	@echo "  make clean        - rimuove venv e artefatti"
 
 $(VENV)/bin/glls:
 	python3 -m venv $(VENV)
@@ -21,6 +22,9 @@ $(VENV)/bin/glls:
 venv: $(VENV)/bin/glls
 
 install: venv
+
+install-nvim: venv
+	./clients/nvim/install.sh
 
 tests: venv
 	$(PY) -m pytest tests -q
