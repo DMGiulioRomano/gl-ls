@@ -1,5 +1,21 @@
 # gl-ls per Neovim
 
+## Installazione automatica
+
+```bash
+./install.sh
+```
+
+Installa il server (`../../setup.sh`, se manca), copia `glls.lua` in
+`~/.config/nvim/lua/` con `cmd` gia' puntato al venv del repo, e aggiunge
+`require("glls")` a `~/.config/nvim/init.lua` (crea il file se non esiste,
+non tocca nulla se e' gia' presente). Rilanciabile in sicurezza in qualsiasi
+momento, anche su una config nvim gia' esistente.
+
+Rispetta `$XDG_CONFIG_HOME` se impostata.
+
+## Installazione manuale
+
 1. Installa il server (dal repo gl-ls): `./setup.sh` — crea `.venv/bin/glls`.
 2. Copia `glls.lua` in `~/.config/nvim/lua/` e in `init.lua`:
 
