@@ -70,7 +70,9 @@ spread; go-to-definition/references sui nomi d'asse; link ai sample.
 .venv/bin/glls --version
 ```
 
-Poi collega l'editor: [`clients/README.md`](clients/README.md).
+Poi collega l'editor: [`clients/README.md`](clients/README.md). Per Neovim
+c'e' anche `make install-nvim`, che installa il server e configura
+`~/.config/nvim` in automatico.
 
 ## Test
 
