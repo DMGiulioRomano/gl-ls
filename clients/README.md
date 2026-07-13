@@ -43,7 +43,7 @@ language-servers = ["glls", "yaml-language-server"]
       "enabled": true,
       "command": ["glls"],
       "selector": "source.yaml",
-      "file_watcher": {"patterns": ["**/study.yml"]}
+      "file_watcher": {"patterns": ["**/*.yml", "**/*.yaml"]}
     }
   }
 }

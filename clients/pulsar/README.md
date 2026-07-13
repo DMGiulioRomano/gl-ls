@@ -12,7 +12,10 @@ pulsar --package link .     # oppure: ppm link .
 3. In Settings → Packages → `glls-client` imposta **serverPath** al `glls`
    del venv (o lascialo se e' nel PATH).
 
-Il client parte solo sui file `study.yml` (grammar YAML). Diagnostica via
+Il client parte solo sui file yaml (grammar YAML) la cui prima riga e'
+esattamente `# gl-ls`. Il marker permette a piu' language server yaml di
+convivere nello stesso repository senza convenzioni sul nome file.
+Diagnostica via
 linter, completamento via autocomplete-plus, hover via datatip, outline,
 definizioni e references via i package `atom-ide-*` / `pulsar-ide-*`.
 Per l'esperienza completa: `pulsar -p install atom-ide-ui` (o i singoli

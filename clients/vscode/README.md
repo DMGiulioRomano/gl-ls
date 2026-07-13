@@ -1,6 +1,7 @@
 # gl-ls per VS Code
 
-Client LSP per gli `study.yml` di granulation-studies.
+Client LSP per i file yaml di granulation-studies che dichiarano il server nel
+contenuto (vedi sotto), non nel nome file.
 
 ## Installazione dal sorgente
 
@@ -22,8 +23,16 @@ venv). Poi in `settings.json`:
 }
 ```
 
-Se `glls` e' nel `PATH` non serve nulla. L'estensione si attiva sui file che
-combaciano con `glls.filePattern` (default `**/study.yml`).
+Se `glls` e' nel `PATH` non serve nulla. L'estensione si attiva sui file yaml
+la cui **prima riga** e' esattamente:
+
+```yaml
+# gl-ls
+```
+
+Questo permette di avere piu' language server yaml nello stesso repository
+(anche nella stessa directory): ognuno riconosce solo i file con la propria
+etichetta.
 
 ## Sviluppo rapido (senza .vsix)
 

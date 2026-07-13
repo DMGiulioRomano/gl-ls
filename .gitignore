@@ -573,3 +573,5 @@ $RECYCLE.BIN/
 # Client editor / CI
 node_modules/
 *.vsix
+
+.vscode-test/
