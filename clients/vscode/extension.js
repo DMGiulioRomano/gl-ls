@@ -1,13 +1,21 @@
-/* Client VS Code per gl-ls: avvia `glls` su stdio per gli study.yml. */
+/* Client VS Code per gl-ls: avvia `glls` su stdio per i file yaml che
+ * dichiarano "# gl-ls" come prima riga. Il marker permette a piu' language
+ * server yaml di convivere nella stessa directory senza convenzioni sul
+ * nome file. */
 const vscode = require("vscode");
 const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
+
+const MARKER = /^#\s*gl-ls\s*$/;
+
+function hasMarker(document) {
+  return MARKER.test(document.lineAt(0).text);
+}
 
 let client;
 
 function activate(context) {
   const config = vscode.workspace.getConfiguration("glls");
   const serverPath = config.get("serverPath", "glls");
-  const pattern = config.get("filePattern", "**/study.yml");
 
   const serverOptions = {
     command: serverPath,
@@ -16,12 +24,16 @@ function activate(context) {
   };
 
   const clientOptions = {
-    documentSelector: [
-      { language: "yaml", pattern },
-      { scheme: "file", pattern },
-    ],
+    documentSelector: [{ language: "yaml" }],
     synchronize: {
-      fileEvents: vscode.workspace.createFileSystemWatcher(pattern),
+      fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{yml,yaml}"),
+    },
+    middleware: {
+      didOpen: (document, next) => {
+        if (hasMarker(document)) {
+          return next(document);
+        }
+      },
     },
   };
 

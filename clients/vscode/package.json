@@ -13,10 +13,7 @@
     "vscode": "^1.75.0"
   },
   "categories": ["Programming Languages", "Linters"],
-  "activationEvents": [
-    "workspaceContains:**/study.yml",
-    "onLanguage:yaml"
-  ],
+  "activationEvents": ["onLanguage:yaml"],
   "main": "./extension.js",
   "contributes": {
     "configuration": {
@@ -26,11 +23,6 @@
           "type": "string",
           "default": "glls",
           "description": "Percorso dell'eseguibile glls (es. /path/al/repo/gl-ls/.venv/bin/glls)."
-        },
-        "glls.filePattern": {
-          "type": "string",
-          "default": "**/study.yml",
-          "description": "Glob dei documenti serviti dal language server."
         },
         "glls.trace.server": {
           "type": "string",
