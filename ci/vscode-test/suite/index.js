@@ -8,6 +8,12 @@ async function run() {
   if (!folder) throw new Error("nessun workspace aperto");
   const file = path.join(folder.uri.fsPath, "study.yml");
 
+  const ext = vscode.extensions.getExtension("dmgiulioromano.gl-ls-vscode");
+  console.log(
+    `estensione: ${ext ? "trovata" : "ASSENTE"}, attiva: ${ext?.isActive}, ` +
+    `serverPath: ${vscode.workspace.getConfiguration("glls").get("serverPath")}`
+  );
+
   const doc = await vscode.workspace.openTextDocument(file);
   await vscode.window.showTextDocument(doc);
 

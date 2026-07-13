@@ -33,6 +33,7 @@ function activate(context) {
   );
 
   client.start().catch((err) => {
+    console.error(`gl-ls: avvio fallito ('${serverPath}'):`, err);
     vscode.window.showErrorMessage(
       `gl-ls: impossibile avviare '${serverPath}': ${err.message}. ` +
         "Imposta glls.serverPath (es. il glls dentro il venv di gl-ls)."
