@@ -160,6 +160,32 @@ def test_build_spread_n_none_for_bare_list():
     assert m.streams["fan"].spread_n is None
 
 
+def test_build_spread_n_from_expr_node():
+    # percorso-v1: n come nodo-expr, valutato col let statico
+    m = _model_of(
+        "streams:\n"
+        "  fan:\n"
+        "    spread:\n"
+        '      n: {expr: "k * 2", let: {k: 3}}\n'
+        "      over:\n"
+        "        base.onset:\n"
+        "          ramp: {start: 0, step: 2}\n"
+    )
+    assert m.streams["fan"].spread_n == 6
+
+
+def test_build_spread_n_expr_unresolvable_falls_back_to_over():
+    m = _model_of(
+        "streams:\n"
+        "  fan:\n"
+        "    spread:\n"
+        '      n: {expr: "voci"}\n'
+        "      over:\n"
+        "        base.onset.values: [0, 1]\n"
+    )
+    assert m.streams["fan"].spread_n == 2
+
+
 def test_build_spread_n_ignores_bool():
     m = _model_of(
         "streams:\n"

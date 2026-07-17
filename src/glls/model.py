@@ -178,6 +178,30 @@ def expand_over(over: Dict[str, Any]) -> Dict[str, OverEntry]:
     return out
 
 
+def _is_expr_node(spec: Any) -> bool:
+    return isinstance(spec, dict) and "expr" in spec
+
+
+def _eval_spread_n(node: Dict[str, Any]) -> Optional[int]:
+    """``spread.n`` da nodo-expr (percorso-v1), valutato col solo ``let``.
+
+    Tollerante: se l'espressione non risolve staticamente (nomi di percorso non
+    in scope) o non da' un intero >= 1, ritorna None e il conteggio si cerca
+    nelle strategy di ``over``."""
+    from . import exprlang
+
+    try:
+        text, let = exprlang.parse_expr_node(node)
+        out = exprlang.eval_expr(text, dict(let))
+    except ValueError:
+        return None
+    if isinstance(out, float) and out.is_integer():
+        out = int(out)
+    if isinstance(out, int) and not isinstance(out, bool) and out >= 1:
+        return out
+    return None
+
+
 def ramp_count(cfg: Dict[str, Any]) -> Optional[int]:
     """Numero di punti di una ``ramp`` scalare piena (None se non statico)."""
     start, stop, step = cfg.get("start"), cfg.get("stop"), cfg.get("step")
@@ -274,7 +298,9 @@ def build(doc: Document) -> StudyModel:
                 decl = spread.get("n")
                 if isinstance(decl, int) and not isinstance(decl, bool):
                     n = decl
-                else:
+                elif _is_expr_node(decl):
+                    n = _eval_spread_n(decl)
+                if n is None:
                     over = spread.get("over")
                     if isinstance(over, dict):
                         for oe in expand_over(over).values():

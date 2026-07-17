@@ -21,6 +21,7 @@ from .model import (
     GEN_MARKERS,
     STACK_RESERVED,
     StudyModel,
+    expand_over,
     ramp_count,
 )
 from .yamlpos import Document, KeyPath, Span
@@ -245,42 +246,50 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
 
 
 def _check_band(bag: Bag, doc: Document, path: KeyPath, cfg: Dict[str, Any],
-                label: str) -> None:
+                label: str, locate=None) -> None:
+    """``locate(*subkeys)`` mappa una sotto-chiave della banda alla sua
+    posizione nel documento; il default e' ``path + subkeys`` (banda annidata
+    canonica). Nello spread con chiavi puntate una banda vive su piu' righe
+    (``.base``/``.range``/``.seed``): il locator punta ogni diagnostica alla
+    riga giusta."""
+    if locate is None:
+        def locate(*ks: Any) -> KeyPath:
+            return path + tuple(ks)
     n = cfg.get("n")
     if n is not None and (not isinstance(n, int) or isinstance(n, bool) or n < 1):
-        bag.add(path + ("n",), f"{label}: 'n' deve essere un intero >= 1.",
+        bag.add(locate("n"), f"{label}: 'n' deve essere un intero >= 1.",
                 code="bad-n", prefer_value=True)
     r = cfg.get("range")
     rn = _num(r)
     if rn is not None and rn < 0:
-        bag.add(path + ("range",),
+        bag.add(locate("range"),
                 f"{label}: 'range' negativo ({rn:g}) — la banda e' "
                 "[base, base+range], range >= 0.",
                 code="negative-range", prefer_value=True)
     dist = cfg.get("distribution")
     if dist is not None and dist not in EI.DISTRIBUTIONS:
-        bag.add(path + ("distribution",),
+        bag.add(locate("distribution"),
                 f"{label}: distribution '{dist}' non valida (uniform | gaussian).",
                 code="bad-enum", prefer_value=True)
     drift = cfg.get("drift")
     if drift is not None:
         if not isinstance(drift, dict):
-            bag.add(path + ("drift",), f"{label}: 'drift' e' un dict {{step, seed?}}.",
+            bag.add(locate("drift"), f"{label}: 'drift' e' un dict {{step, seed?}}.",
                     code="drift-type")
         else:
             extra = set(drift) - {"step", "seed"}
             if extra:
-                bag.add(path + ("drift",),
+                bag.add(locate("drift"),
                         f"{label}: drift, chiavi non ammesse {sorted(extra)} "
                         "(solo step/seed).",
                         code="drift-keys")
             st = _num(drift.get("step"))
             if st is not None and st < 0:
-                bag.add(path + ("drift", "step"),
+                bag.add(locate("drift", "step"),
                         f"{label}: drift.step negativo — 0 congela, > 0 cammina.",
                         code="drift-step", prefer_value=True)
     for border in ("base", "range"):
-        _check_env_times(bag, path + (border,), cfg.get(border), label)
+        _check_env_times(bag, locate(border), cfg.get(border), label)
 
 
 def _check_env_times(bag: Bag, path: KeyPath, form: Any, label: str) -> None:
@@ -527,52 +536,89 @@ def _check_streams(bag: Bag, doc: Document, m: StudyModel) -> None:
             _check_spread(bag, doc, m, spath + ("spread",), spread, name)
 
 
+def _over_entry_kp(spath: KeyPath, oe) -> KeyPath:
+    """Key-path documento rappresentativo di una entry-over (per span a livello
+    di path): la chiave annidata se c'e', altrimenti la prima chiave puntata."""
+    key = oe.whole_key if oe.whole_key is not None else oe.doc_keys[0]
+    return spath + ("over", key)
+
+
+def _over_marker_kp(spath: KeyPath, oe, marker: str) -> KeyPath:
+    """Key-path documento del valore di un marcatore della strategy: la chiave
+    puntata del frammento se il marcatore arriva da li', altrimenti il campo
+    annidato sotto la chiave-path."""
+    if marker in oe.marker_keys:
+        return spath + ("over", oe.marker_keys[marker])
+    return spath + ("over", oe.whole_key, marker)
+
+
 def _check_spread(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
                   spread: Any, entry: str) -> None:
     if not isinstance(spread, dict):
         bag.add(spath, "'spread' e' un dict {n?, over, sweep?}.", code="spread-type")
         return
-    n_decl = spread.get("n")
-    if n_decl is not None and (not isinstance(n_decl, int) or isinstance(n_decl, bool)
-                               or n_decl < 1):
-        bag.add(spath + ("n",), "spread.n deve essere un intero >= 1.",
-                code="bad-n", prefer_value=True)
-        n_decl = None
+    n_decl = _check_spread_n(bag, spath, spread.get("n"))
     over = spread.get("over")
     if not isinstance(over, dict) or not over:
         bag.add(spath, f"Entry-spread '{entry}': manca 'over' "
                 "({path puntato: strategy}).", code="spread-no-over")
         return
+
+    entries = expand_over(over)
     owned: List[Tuple[str, int]] = []
-    for dotted, strat in over.items():
-        opath = spath + ("over", dotted)
-        _check_over_path(bag, m, opath, str(dotted))
-        if isinstance(strat, dict):
-            markers = [k for k in _SPREAD_MARKERS if k in strat]
-            if len(markers) != 1:
-                bag.add(opath,
-                        f"spread.over['{dotted}']: serve esattamente una strategy "
-                        f"tra values | ramp | banda (base/range) | expr "
-                        f"(trovate: {markers or 'nessuna'}).",
-                        code="spread-strategy")
-                continue
-            mk = markers[0]
-            if mk == "values" and isinstance(strat.get("values"), list):
-                owned.append((str(dotted), len(strat["values"])))
-            elif mk == "ramp" and isinstance(strat.get("ramp"), dict):
-                _check_ramp(bag, opath + ("ramp",), strat["ramp"],
-                            f"spread.over['{dotted}']", require_stop=False)
-                c = ramp_count(strat["ramp"])
-                if c is not None and {"start", "stop", "step"} <= set(strat["ramp"]):
-                    owned.append((str(dotted), c))
-            elif mk == "base":
-                _check_band(bag, doc, opath, strat, f"spread.over['{dotted}']")
-                nn = strat.get("n")
-                if isinstance(nn, int) and not isinstance(nn, bool):
-                    owned.append((str(dotted), nn))
+    expr_entries: List[Any] = []
+    for oe in entries.values():
+        _check_over_path(bag, m, _over_entry_kp(spath, oe), oe.path)
+        strat = oe.strategy
+        if not isinstance(strat, dict):
+            bag.add(_over_entry_kp(spath, oe),
+                    f"spread.over['{oe.path}']: serve una strategy (dict: values "
+                    "| ramp | banda | expr), non un valore nudo.",
+                    code="spread-strategy")
+            continue
+        markers = [k for k in _SPREAD_MARKERS if k in strat]
+        if len(markers) != 1:
+            _report_strategy_count(bag, spath, oe, markers)
+            continue
+        mk = markers[0]
+        if mk == "values":
+            vals = strat.get("values")
+            if isinstance(vals, list):
+                owned.append((oe.path, len(vals)))
+            else:
+                bag.add(_over_marker_kp(spath, oe, "values"),
+                        f"spread.over['{oe.path}']: 'values' deve essere una lista.",
+                        code="spread-strategy", prefer_value=True)
+        elif mk == "ramp":
+            r = strat.get("ramp")
+            _check_ramp(bag, _over_marker_kp(spath, oe, "ramp"), r,
+                        f"spread.over['{oe.path}']", require_stop=False)
+            if isinstance(r, dict) and {"start", "stop", "step"} <= set(r):
+                c = ramp_count(r)
+                if c is not None:
+                    owned.append((oe.path, c))
+        elif mk == "base":
+            _check_band(bag, doc, _over_entry_kp(spath, oe), strat,
+                        f"spread.over['{oe.path}']",
+                        locate=lambda *ks, _oe=oe: (_over_entry_kp(spath, _oe) if not ks
+                                                    else _over_marker_kp(spath, _oe, ks[0]) + tuple(ks[1:])))
+            nn = strat.get("n")
+            if isinstance(nn, int) and not isinstance(nn, bool):
+                owned.append((oe.path, nn))
+        elif mk == "expr":
+            expr_entries.append(oe)
+
     counts = {c for _, c in owned}
     if n_decl is not None:
         counts.add(n_decl)
+
+    # gli expr non possiedono il conteggio: si valutano con la n risolta
+    if expr_entries:
+        n_eff = n_decl if n_decl is not None else (
+            next(iter(counts)) if len(counts) == 1 else 2)
+        for oe in expr_entries:
+            _check_spread_expr(bag, doc, m, spath, oe, n_eff)
+
     if len(counts) > 1:
         det = ", ".join(f"{p}: {c}" for p, c in owned)
         if n_decl is not None:
@@ -587,6 +633,123 @@ def _check_spread(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
                 "'n:' oppure una strategy che possiede il conteggio "
                 "(values, ramp piena, banda con n).",
                 code="spread-no-n")
+
+
+def _report_strategy_count(bag: Bag, spath: KeyPath, oe, markers: List[str]) -> None:
+    if markers:
+        srcs = ", ".join(oe.marker_keys.get(mk, oe.whole_key or oe.path)
+                         for mk in markers)
+        bag.add(_over_entry_kp(spath, oe),
+                f"spread.over['{oe.path}']: piu' strategy sullo stesso path "
+                f"({srcs}) — esattamente una tra values | ramp | banda | expr.",
+                code="spread-strategy")
+    else:
+        bag.add(_over_entry_kp(spath, oe),
+                f"spread.over['{oe.path}']: serve esattamente una strategy tra "
+                "values | ramp | banda (base/range) | expr (nessuna trovata).",
+                code="spread-strategy")
+
+
+def _check_spread_n(bag: Bag, spath: KeyPath, raw_n: Any) -> Optional[int]:
+    """``spread.n`` normalizzato: intero >= 1, o nodo-expr valutato (percorso-v1).
+
+    Nel nodo-expr il runtime non inietta ``i``/``n`` (li possiede lo spread):
+    lo scope e' il solo ``let``, e il risultato deve essere un intero >= 1."""
+    if raw_n is None:
+        return None
+    if exprlang.is_expr_node(raw_n):
+        try:
+            text, let = exprlang.parse_expr_node(raw_n)
+            out = exprlang.eval_expr(text, dict(let))
+        except ValueError as e:
+            bag.add(spath + ("n",), str(e), code="expr", prefer_value=True)
+            return None
+        if isinstance(out, float) and out.is_integer():
+            out = int(out)
+        if not isinstance(out, int) or isinstance(out, bool) or out < 1:
+            bag.add(spath + ("n",),
+                    f"spread.n: l'espressione deve dare un intero >= 1 "
+                    f"(valutato {out!r}).",
+                    code="bad-n", prefer_value=True)
+            return None
+        return out
+    if not isinstance(raw_n, int) or isinstance(raw_n, bool) or raw_n < 1:
+        bag.add(spath + ("n",),
+                "spread.n deve essere un intero >= 1 (o un nodo-expr).",
+                code="bad-n", prefer_value=True)
+        return None
+    return raw_n
+
+
+_LET_BAND_KEYS = frozenset({"base", "range", "seed", "distribution", "drift"})
+
+
+def _check_spread_expr(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
+                       oe, n_eff: int) -> None:
+    """Valida la strategy expr di uno spread come il runtime: estrae le
+    bande-let (pescaggi random per-stream) prima del parse, poi valuta
+    l'espressione con ``i``/``n`` iniettati."""
+    strat = oe.strategy
+    node = strat
+    rand_let: Dict[str, Any] = {}
+    let = strat.get("let")
+    let_kp = _over_marker_kp(spath, oe, "let")
+    if isinstance(let, dict):
+        for var, v in let.items():
+            if isinstance(v, dict) and any(k in v for k in GEN_MARKERS):
+                rand_let[var] = v
+                _check_let_band(bag, let_kp, var, v, oe.path)
+        if rand_let:
+            static = {k: v for k, v in let.items() if k not in rand_let}
+            node = {**strat, "let": static}
+
+    expr_kp = _over_marker_kp(spath, oe, "expr")
+    try:
+        text, static_let = exprlang.parse_expr_node(node)
+    except ValueError as e:
+        bag.add(expr_kp, str(e), code="expr", prefer_value=True)
+        return
+    reserved = sorted({"i", "n"} & (set(static_let) | set(rand_let)))
+    if reserved:
+        bag.add(let_kp,
+                f"spread.over['{oe.path}'] expr: {reserved} riservati (indice e "
+                "conteggio degli stream generati) — ridefinirli in 'let' e' errore.",
+                code="expr-reserved")
+        return
+    scope: Dict[str, Any] = dict(static_let)
+    for var in rand_let:
+        scope[var] = 1.0  # un pescaggio-banda vale uno scalare, ai fini del check
+    scope["i"] = 0
+    scope["n"] = n_eff
+    try:
+        exprlang.eval_expr(text, scope)
+    except ValueError as e:
+        bag.add(expr_kp, str(e), code="expr", prefer_value=True)
+
+
+def _check_let_band(bag: Bag, kp: KeyPath, var: str, node: Dict[str, Any],
+                    path: str) -> None:
+    """Regole della banda-let (runtime ``spread._let_band``): unico generatore
+    ammesso la banda (``base``), senza ``n`` proprio, solo chiavi-banda."""
+    markers = sorted(k for k in GEN_MARKERS if k in node)
+    if markers != ["base"]:
+        bag.add(kp,
+                f"spread.over['{path}'] expr, 'let.{var}' usa {markers} — in "
+                "'let' l'unico generatore ammesso e' la banda ('base').",
+                code="expr-let-band")
+        return
+    if "n" in node:
+        bag.add(kp,
+                f"spread.over['{path}'] expr, 'let.{var}' dichiara 'n' — il "
+                "conteggio e' dello spread, la banda-let pesca un valore per stream.",
+                code="expr-let-band")
+        return
+    extra = set(node) - _LET_BAND_KEYS
+    if extra:
+        bag.add(kp,
+                f"spread.over['{path}'] expr, 'let.{var}': chiavi non ammesse "
+                f"{sorted(extra)} (solo {sorted(_LET_BAND_KEYS)}).",
+                code="expr-let-band")
 
 
 def _check_over_path(bag: Bag, m: StudyModel, opath: KeyPath, dotted: str) -> None:
@@ -769,35 +932,21 @@ def _check_expr_nodes(bag: Bag, doc: Document, m: StudyModel) -> None:
     for entry in list(doc.iter_entries()):
         if entry.kind != "mapping":
             continue
-        value = doc.get(entry.path)
+        # i nodi-expr dentro un blocco spread (spread.n e spread.over.*, in
+        # forma annidata o puntata) sono validati da _check_spread, che gestisce
+        # le bande-let e lo scope i/n: qui si saltano per non duplicarli.
+        p = entry.path
+        if len(p) >= 3 and p[0] == "streams" and p[2] == "spread":
+            continue
+        value = doc.get(p)
         if not exprlang.is_expr_node(value):
             continue
-        # dentro un blocco spread solo se il path e' streams.<nome>.spread...
-        spread_stream = (
-            str(entry.path[1])
-            if (len(entry.path) > 2 and entry.path[0] == "streams"
-                and entry.path[2] == "spread")
-            else None
-        )
         try:
             text, let = exprlang.parse_expr_node(value)
         except ValueError as e:
-            bag.add(entry.path, str(e), code="expr", prefer_value=False)
+            bag.add(p, str(e), code="expr", prefer_value=False)
             continue
-        scope = dict(let)
-        if spread_stream is not None:
-            si = m.streams.get(spread_stream)
-            n = si.spread_n if si and si.is_spread and si.spread_n else 2
-            scope.setdefault("i", 0)
-            scope.setdefault("n", n)
-            if "i" in let or "n" in let:
-                bag.add(entry.path + ("let",),
-                        "expr in spread: 'i' e 'n' sono riservati (indice e "
-                        "conteggio degli stream generati) — ridefinirli in let "
-                        "e' errore.",
-                        code="expr-reserved")
-                continue
         try:
-            exprlang.eval_expr(text, scope)
+            exprlang.eval_expr(text, dict(let))
         except ValueError as e:
-            bag.add(entry.path + ("expr",), str(e), code="expr", prefer_value=True)
+            bag.add(p + ("expr",), str(e), code="expr", prefer_value=True)
