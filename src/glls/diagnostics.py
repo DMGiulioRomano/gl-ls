@@ -127,18 +127,39 @@ def _check_root(bag: Bag, doc: Document, m: StudyModel) -> None:
 
 
 
+# Parametri che l'engine riscala da campioni a secondi (fattore 1/output_sr)
+# quando ``grain.duration_unit: samples`` (``stream._pre_normalize_grain_params``).
+_SAMPLES_SCALED = frozenset({"grain.duration", "grain.duration_range"})
+
+
+def _samples_unit(doc: Document, bpath: KeyPath) -> bool:
+    """True se il blocco engine ``bpath`` lavora in campioni: vale l'override
+    per-stream se dichiarato, altrimenti l'unita' ereditata dal base root
+    (semantica del deep-merge stream su documento)."""
+    u = doc.get(bpath + ("grain", "duration_unit"))
+    if u is None and bpath != ("base",):
+        u = doc.get(("base", "grain", "duration_unit"))
+    return u == "samples"
+
+
 def _check_bounds_value(
-    bag: Bag, path: KeyPath, engine_path: str, v: Any, label: str
+    bag: Bag, path: KeyPath, engine_path: str, v: Any, label: str,
+    in_samples: bool = False,
 ) -> None:
     b = EI.bounds_for(engine_path)
     n = _num(v)
     if b is None or n is None:
         return
+    note = ""
+    if in_samples and engine_path in _SAMPLES_SCALED:
+        note = f" ({n:g} campioni a {EI.OUTPUT_SR} Hz)"
+        n = n / EI.OUTPUT_SR
     lo, hi = b
     if (lo is not None and n < lo) or (hi is not None and n > hi):
         hi_s = "∞" if hi is None else f"{hi:g}"
         bag.add(path,
-                f"{label}: {n:g} fuori bounds [{lo:g}, {hi_s}] per '{engine_path}'.",
+                f"{label}: {n:g}{note} fuori bounds [{lo:g}, {hi_s}] "
+                f"per '{engine_path}'.",
                 code="out-of-bounds", prefer_value=True)
 
 
@@ -224,12 +245,15 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
             _check_ramp(bag, apath + ("ramp",), cfg.get("ramp"), f"Asse '{name}'",
                         require_stop=True)
 
-        # bounds su baseline e values espliciti
+        # bounds su baseline e values espliciti; i valori di un asse atterrano
+        # nel base root, quindi vale la sua duration_unit
         engine_path = cfg.get("path")
         if isinstance(engine_path, str):
+            in_samples = _samples_unit(doc, ("base",))
             if "baseline" in cfg:
                 _check_bounds_value(bag, apath + ("baseline",), engine_path,
-                                    cfg.get("baseline"), f"Asse '{name}' baseline")
+                                    cfg.get("baseline"), f"Asse '{name}' baseline",
+                                    in_samples=in_samples)
             elif EI.needs_baseline(engine_path):
                 why = ("unit-driven (pitch)" if engine_path.startswith("pitch")
                        else "senza default engine")
@@ -242,7 +266,8 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
             if isinstance(vals, list):
                 for i, v in enumerate(vals):
                     _check_bounds_value(bag, apath + ("values", i), engine_path, v,
-                                        f"Asse '{name}' values[{i}]")
+                                        f"Asse '{name}' values[{i}]",
+                                        in_samples=in_samples)
 
 
 def _check_band(bag: Bag, doc: Document, path: KeyPath, cfg: Dict[str, Any],
@@ -830,6 +855,7 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
                     "cavallo della fine del file usa loop_dur.",
                     code="loop-order", prefer_value=True)
     # bounds sui parametri noti (scalari ed envelope)
+    in_samples = _samples_unit(doc, bpath)
     for dotted, info in EI.PARAMS.items():
         parts = tuple(dotted.split("."))
         if parts[0] in ("onset", "duration") and len(parts) == 1:
@@ -837,13 +863,14 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
         v = doc.get(bpath + parts)
         if v is None:
             continue
-        _check_param_bounds(bag, bpath + parts, dotted, v, m)
+        _check_param_bounds(bag, bpath + parts, dotted, v, m,
+                            in_samples=in_samples)
 
 
 def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
-                        m: StudyModel) -> None:
+                        m: StudyModel, in_samples: bool = False) -> None:
     if _num(v) is not None:
-        _check_bounds_value(bag, path, dotted, v, dotted)
+        _check_bounds_value(bag, path, dotted, v, dotted, in_samples=in_samples)
         return
     pts: Optional[list] = None
     ppath = path
@@ -861,7 +888,7 @@ def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
             y = _num(p[1])
             if y is not None:
                 _check_bounds_value(bag, ppath + (i,), dotted, y,
-                                    f"{dotted} t={p[0]!r}")
+                                    f"{dotted} t={p[0]!r}", in_samples=in_samples)
             if len(p) == 3 and p[2] not in EI.INTERPOLATIONS:
                 bag.add(ppath + (i,),
                         f"{dotted}: type per-punto '{p[2]}' non valido "

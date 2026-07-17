@@ -154,6 +154,114 @@ def test_engine_envelope_bounds():
     assert "out-of-bounds" in codes(text)
 
 
+def test_grain_duration_samples_scalar_not_flagged():
+    # 512 campioni ~ 10.7 ms: letti come secondi sarebbero > 10 (falso positivo)
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 512\n    duration_unit: samples\n")
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_grain_duration_seconds_still_flagged():
+    text = BASE.replace("base:\n", "base:\n  grain:\n    duration: 512\n")
+    assert "out-of-bounds" in codes(text)
+
+
+def test_grain_duration_samples_real_violation_flagged():
+    # 500000 campioni a 48 kHz ~ 10.4 s: fuori bounds anche dopo la conversione
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 500000\n    duration_unit: samples\n")
+    ds = diags_of(text)
+    d = next(d for d in ds if d.code == "out-of-bounds")
+    assert "campioni" in d.message
+
+
+def test_grain_duration_samples_below_one_sample_flagged():
+    # il floor in spazio-campioni e' 1 campione (1/output_sr secondi)
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 0.5\n    duration_unit: samples\n")
+    assert "out-of-bounds" in codes(text)
+
+
+def test_grain_duration_samples_envelope_not_flagged():
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: [[0, 64], [6, 4096]]\n"
+        "    duration_unit: samples\n")
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_grain_duration_range_samples_not_flagged():
+    # l'engine scala anche duration_range con duration_unit: samples
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 512\n    duration_range: 128\n"
+        "    duration_unit: samples\n")
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_grain_duration_samples_axis_values_not_flagged():
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 512\n    duration_unit: samples\n")
+    text += """  grain_duration:
+    path: grain.duration
+    baseline: 512
+    values: [128, 2048]
+"""
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_grain_duration_axis_values_seconds_still_flagged():
+    text = BASE + """  grain_duration:
+    path: grain.duration
+    baseline: 0.05
+    values: [11, 50]
+"""
+    assert "out-of-bounds" in codes(text)
+
+
+def test_grain_duration_samples_stream_override_not_flagged():
+    text = BASE + """streams:
+  a:
+    base:
+      grain:
+        duration: 512
+        duration_unit: samples
+"""
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_grain_duration_samples_inherited_by_stream():
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 512\n    duration_unit: samples\n")
+    text += """streams:
+  a:
+    base:
+      grain:
+        duration: 1024
+"""
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_grain_duration_stream_seconds_override_still_flagged():
+    # lo stream torna esplicitamente ai secondi: 512 e' di nuovo fuori bounds
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 512\n    duration_unit: samples\n")
+    text += """streams:
+  a:
+    base:
+      grain:
+        duration: 512
+        duration_unit: seconds
+"""
+    assert "out-of-bounds" in codes(text)
+
+
 def test_density_fill_factor_exclusive():
     text = BASE.replace("base:\n", "base:\n  density: 20\n  fill_factor: 2\n")
     assert "density-fill" in codes(text)
