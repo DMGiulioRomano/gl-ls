@@ -407,3 +407,77 @@ def test_diagnostics_update_on_change(client):
     assert any(d.get("code") == "spread-count" for d in diags)
     diags = client.change(uri, STUDY, 3)
     assert diags == []
+
+
+# ---------------------------------------------------------------------------
+# spread.over: chiavi puntate (issue #3)
+
+DOTTED = """study_id: dotted
+duration: 20
+base:
+  onset: 0
+  duration: 6
+  sample: corpus.wav
+axes:
+  density:
+    path: density
+    baseline: 20
+    values: [10, 30]
+streams:
+  fan:
+    spread:
+      over:
+        base.pointer.start.values: [0.1, 0.25, 0.4]
+        base.onset.base: 0
+        base.onset.range: 2
+        base.onset.seed: 7
+"""
+
+
+def test_dotted_over_is_clean(client):
+    uri = "file:///tmp/dotted.yml"
+    diags = client.open(uri, DOTTED)
+    assert diags == []
+
+
+def test_dotted_over_count_owned_from_values(client):
+    uri = "file:///tmp/dotted2.yml"
+    # una banda-n discorde rispetto ai 3 values -> spread-count
+    text = DOTTED.replace("base.onset.seed: 7", "base.onset.seed: 7\n        base.onset.n: 5")
+    diags = client.open(uri, text)
+    assert any(d.get("code") == "spread-count" for d in diags)
+
+
+def test_dotted_over_conflict_two_markers(client):
+    uri = "file:///tmp/dotted3.yml"
+    text = DOTTED.replace(
+        "base.pointer.start.values: [0.1, 0.25, 0.4]",
+        'base.pointer.start.values: [0.1, 0.25, 0.4]\n        base.pointer.start.expr: "i"',
+    )
+    diags = client.open(uri, text)
+    conflict = next(d for d in diags if d.get("code") == "spread-strategy")
+    assert "base.pointer.start.values" in conflict["message"]
+    assert "base.pointer.start.expr" in conflict["message"]
+
+
+def test_dotted_over_hover_shows_marker(client):
+    uri = "file:///tmp/dotted4.yml"
+    client.open(uri, DOTTED)
+    lines = DOTTED.split("\n")
+    line = next(i for i, l in enumerate(lines) if "base.pointer.start.values" in l)
+    col = lines[line].index("base.pointer.start.values")
+    result = client.request("textDocument/hover", {
+        "textDocument": {"uri": uri},
+        "position": {"line": line, "character": col + 2},
+    })
+    assert result is not None
+    v = result["contents"]["value"]
+    assert "base.pointer.start" in v and "values" in v
+
+
+def test_dotted_over_semantic_tokens_present(client):
+    uri = "file:///tmp/dotted5.yml"
+    client.open(uri, DOTTED)
+    toks = client.request("textDocument/semanticTokens/full",
+                          {"textDocument": {"uri": uri}})
+    assert toks and len(toks["data"]) % 5 == 0
