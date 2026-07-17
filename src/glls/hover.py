@@ -14,7 +14,7 @@ from lsprotocol import types
 from . import engine_info as EI
 from . import schema
 from .convert import as_num as _num, fmt_num
-from .model import AXES_RESERVED, STACK_RESERVED, StudyModel
+from .model import AXES_RESERVED, STACK_RESERVED, StudyModel, split_over_key
 from .yamlpos import Document, KeyPath
 
 
@@ -113,6 +113,16 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
                    "(deep-merge; le liste rimpiazzano).", rng)
     if ctx == "over":
         dotted = str(name)
+        split = split_over_key(dotted, doc.get(path))
+        if split is not None:
+            head, marker = split
+            mk = schema.key_in("spread_strategy", marker)
+            text = (f"Chiave puntata: path `{head}` + strategy `{marker}` "
+                    f"(equivale a `{head}:` con `{marker}:` annidato).")
+            if mk is not None:
+                text += f"\n\n**`{marker}`** — {mk.doc}"
+            info = EI.PARAMS.get(head[5:]) if head.startswith("base.") else None
+            return _md(text + (_bounds_line(head[5:]) if info else ""), rng)
         info = EI.PARAMS.get(dotted[5:]) if dotted.startswith("base.") else None
         base = f"Path puntato nel documento: i valori della strategy finiscono in `{dotted}` di ogni stream generato."
         return _md(base + (_bounds_line(dotted[5:]) if info else ""), rng)
