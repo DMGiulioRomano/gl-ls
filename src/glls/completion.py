@@ -188,6 +188,13 @@ def _complete_key(doc: yamlpos.Document, m: StudyModel,
             if dotted not in present:
                 items.append(_item(dotted, "", types.CompletionItemKind.Reference,
                                    snippet=dotted + ":\n  ", sort="2"))
+        # forme puntate terminali: il marcatore come suffisso dopo il path
+        # (equivalgono alla forma annidata; la disambiguazione le tiene
+        # distinte dalle strategy a valore-dict, che restano annidate)
+        for label, snip, doc_md in _over_dotted_terminals(m):
+            if label not in present:
+                items.append(_item(label, doc_md, types.CompletionItemKind.Reference,
+                                   snippet=snip, sort="3"))
     elif ctx == "streams":
         items.append(_item(
             "ventaglio",
@@ -210,6 +217,22 @@ def _over_paths(m: StudyModel) -> List[str]:
     for name in m.walks:
         out += [f"stack.{name}.seed", f"stack.{name}.base", f"stack.{name}.range"]
     return out
+
+
+def _over_dotted_terminals(m: StudyModel):
+    """Forme puntate terminali per l'autocomplete di ``spread.over``.
+
+    Il marcatore ``values``/``expr`` come suffisso di un path engine, con lo
+    snippet del valore terminale: e' la notazione a punti equivalente alla
+    forma annidata, coerente con l'espansione degli override di stream."""
+    for dotted in EI.AXIS_PATHS:
+        base = "base." + dotted
+        yield (f"{base}.values",
+               f"{base}.values: [${{1}}]",
+               "Lista esplicita di valori (uno per stream generato).")
+        yield (f"{base}.expr",
+               f'{base}.expr: "${{1:i}}"',
+               "Espressione su `i`/`n` (indice e conteggio degli stream).")
 
 
 def _complete_value(doc: yamlpos.Document, m: StudyModel, path: Tuple[str, ...],

@@ -1,13 +1,24 @@
 """Valutatore del nodo-expr, allineato a ``granstudies.expr``.
 
-Replica la grammatica whitelist del nodo-expr di granulation-studies (numeri,
-nomi, ``+ - * / **``, meno unario, parentesi; Env⊙scalare sulle y, Env⊙Env
-errore) per dare all'editor la **stessa** diagnostica del runtime, a tempo di
-digitazione. Modulo puro, solo stdlib.
+Replica la grammatica whitelist del nodo-expr di granulation-studies per dare
+all'editor la **stessa** diagnostica del runtime, a tempo di digitazione:
+numeri, nomi, ``+ - * / // % **``, meno unario, parentesi, le costanti
+``pi``/``e`` (ombreggiabili dallo scope) e le chiamate alle funzioni
+primitive di ``_FUNCTIONS`` (``abs``/``floor``/``ceil``/``sqrt``/``exp``/
+``log``/``sin``/``cos``/``tan``/``atan``/``min``/``max``/``mix``). Una
+chiamata con un argomento-Env agisce elementwise sulle y; due Env nella
+stessa operazione o chiamata sono un errore — tranne ``mix(A, B, w)``,
+l'unica porta Env con Env (morphing pesato, campionato sull'unione dei
+tempi). Modulo puro, solo stdlib.
+
+Unica divergenza voluta dal runtime: la guardia ``_safe_pow`` (potenze fuori
+scala rifiutate) protegge il processo del server; il runtime usa la potenza
+nuda.
 """
 from __future__ import annotations
 
 import ast
+import math
 import operator
 from typing import Any, Dict, Mapping, Tuple
 
@@ -29,7 +40,32 @@ _BINOPS = {
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
     ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
     ast.Pow: _safe_pow,
+}
+
+# Costanti note alle espressioni; un nome uguale nello scope (``let``) le
+# ombreggia.
+_CONSTANTS = {"pi": math.pi, "e": math.e}
+
+# Funzioni primitive: nome -> (fn, arieta' minima, arieta' massima o None).
+_FUNCTIONS = {
+    "abs": (abs, 1, 1),
+    "floor": (math.floor, 1, 1),
+    "ceil": (math.ceil, 1, 1),
+    "sqrt": (math.sqrt, 1, 1),
+    "exp": (math.exp, 1, 1),
+    "log": (math.log, 1, 2),
+    "sin": (math.sin, 1, 1),
+    "cos": (math.cos, 1, 1),
+    "tan": (math.tan, 1, 1),
+    "atan": (math.atan, 1, 1),
+    "min": (min, 2, None),
+    "max": (max, 2, None),
+    # ``mix`` ha un ramo dedicato in ``_call`` (accetta Env multipli: e'
+    # l'unica porta Env con Env); qui vive per la whitelist e l'arieta'.
+    "mix": (None, 3, 3),
 }
 
 _NODE_KEYS = frozenset({"expr", "let"})
@@ -65,9 +101,10 @@ def eval_expr(text: str, scope: Mapping[str, Any]) -> Any:
     except SyntaxError as exc:
         raise ValueError(f"expr: sintassi non valida in {text!r}: {exc.msg}.") from exc
     try:
-        return _eval(tree.body, scope)
+        out = _eval(tree.body, scope)
     except ZeroDivisionError:
-        raise ValueError(f"expr: divisione per zero in {text!r}.") from None
+        raise ValueError(f"expr: divisione o modulo per zero in {text!r}.") from None
+    return _rebuild(out)
 
 
 def _is_scalar(v: Any) -> bool:
@@ -117,10 +154,12 @@ def _eval(node: ast.AST, scope: Mapping[str, Any]) -> Any:
             raise ValueError(f"expr: costante non numerica {node.value!r}.")
         return node.value
     if isinstance(node, ast.Name):
-        if node.id not in scope:
-            names = ", ".join(sorted(scope)) or "nessuno"
-            raise ValueError(f"expr: nome ignoto '{node.id}' (disponibili: {names}).")
-        return _checked(node.id, scope[node.id])
+        if node.id in scope:
+            return _checked(node.id, scope[node.id])
+        if node.id in _CONSTANTS:
+            return _CONSTANTS[node.id]
+        names = ", ".join(sorted(set(scope) | set(_CONSTANTS))) or "nessuno"
+        raise ValueError(f"expr: nome ignoto '{node.id}' (disponibili: {names}).")
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
         v = _eval(node.operand, scope)
         if isinstance(node.op, ast.UAdd):
@@ -140,7 +179,193 @@ def _eval(node: ast.AST, scope: Mapping[str, Any]) -> Any:
         if right_env:
             return _map_y(right, lambda y: op(left, y))
         return op(left, right)
+    if isinstance(node, ast.Call):
+        return _call(node, scope)
     raise ValueError(
         f"expr: costrutto non ammesso {ast.unparse(node)!r} "
-        "(solo numeri, nomi, + - * / **, parentesi)."
+        "(solo numeri, nomi, + - * / // % **, funzioni primitive, parentesi)."
     )
+
+
+def _call(node: ast.Call, scope: Mapping[str, Any]) -> Any:
+    """Una chiamata a funzione primitiva, elementwise se un argomento e' Env."""
+    if not isinstance(node.func, ast.Name) or node.func.id not in _FUNCTIONS:
+        got = ast.unparse(node.func)
+        names = ", ".join(sorted(_FUNCTIONS))
+        raise ValueError(f"expr: funzione ignota '{got}' (disponibili: {names}).")
+    name = node.func.id
+    if node.keywords:
+        raise ValueError(
+            f"expr: '{name}' non accetta argomenti keyword (solo posizionali)."
+        )
+    fn, lo, hi = _FUNCTIONS[name]
+    args = [_eval(a, scope) for a in node.args]
+    count = len(args)
+    if count < lo or (hi is not None and count > hi):
+        span = str(lo) if hi == lo else (f"{lo}-{hi}" if hi else f"almeno {lo}")
+        raise ValueError(
+            f"expr: '{name}' vuole {span} argomenti (ricevuti {count})."
+        )
+    if name == "mix":
+        return _mix(*args)
+
+    def apply(*xs):
+        try:
+            return fn(*xs)
+        except (ValueError, OverflowError):
+            frag = ", ".join(repr(x) for x in xs)
+            raise ValueError(f"expr: {name}({frag}) fuori dominio.") from None
+
+    env_pos = [k for k, a in enumerate(args) if not _is_scalar(a)]
+    if not env_pos:
+        return apply(*args)
+    if len(env_pos) > 1:
+        raise ValueError(
+            "expr: operazione tra due Env non supportata (solo Env con scalare)."
+        )
+    (k,) = env_pos
+
+    def on_y(y):
+        xs = list(args)
+        xs[k] = y
+        return apply(*xs)
+
+    return _map_y(args[k], on_y)
+
+
+# --- mix(A, B, w): il morphing tra due forme ---------------------------------
+#
+# Port di ``granstudies.expr._mix``: ricampiona A e B sull'unione dei tempi e
+# interpola le y col peso ``w`` (a sua volta Env ammesso). Fast-path esatti
+# dove il risultato resta piecewise-linear; altrove campionamento adattivo.
+
+_MIX_REL_TOL = 1e-3
+_MIX_MAX_DEPTH = 12
+
+
+def _mix_form(v: Any) -> Tuple[str, Any, float]:
+    """``(kind, data, curve)`` di un argomento di mix."""
+    if _is_scalar(v):
+        return "scalar", v, 1.0
+    if isinstance(v, dict):
+        kind = v.get("type", "linear")
+        curve = v.get("curve", 1.0)
+        pts = sorted(v["points"], key=lambda p: p[0])
+        if kind == "step":
+            if curve != 1.0:
+                raise ValueError(
+                    "expr: mix, 'curve' non ha effetto con 'type: step' "
+                    "(nessuna rampa da piegare)."
+                )
+            return "step", pts, 1.0
+        if kind != "linear":
+            raise ValueError(
+                f"expr: mix, type '{kind}' non campionabile (linear | step)."
+            )
+        if curve <= 0:
+            raise ValueError(
+                f"expr: mix, curve deve essere > 0 (ricevuto {curve})."
+            )
+        return "linear", pts, curve
+    if _is_pairs(v):
+        return "linear", sorted(([t, y] for t, y in v), key=lambda p: p[0]), 1.0
+    a, b = v  # shorthand [a, b] == [[0, a], [1, b]]
+    return "linear", [[0.0, a], [1.0, b]], 1.0
+
+
+def _form_at(form: Tuple[str, Any, float], t: float) -> float:
+    """La forma campionata al tempo ``t``, con hold fuori dai bordi."""
+    kind, data, curve = form
+    if kind == "scalar":
+        return data
+    pts = data
+    if t <= pts[0][0]:
+        return pts[0][1]
+    if t >= pts[-1][0]:
+        return pts[-1][1]
+    for (t0, v0), (t1, v1) in zip(pts, pts[1:]):
+        if t0 <= t <= t1:
+            if kind == "step" or t1 == t0:
+                return v0
+            u = (t - t0) / (t1 - t0)
+            if curve != 1.0:
+                u = u ** curve
+            return v0 + (v1 - v0) * u
+    return pts[-1][1]  # irraggiungibile: t e' tra primo e ultimo tempo
+
+
+def _mix(a: Any, b: Any, w: Any) -> Any:
+    """``A*(1-w) + B*w``: morphing pesato tra due forme."""
+    forms = [_mix_form(x) for x in (a, b, w)]
+    kinds = {kind for kind, _, _ in forms if kind != "scalar"}
+    if not kinds:
+        return a + (b - a) * w
+    if "step" in kinds and "linear" in kinds:
+        raise ValueError(
+            "expr: mix tra una forma step e una continua non e' supportato "
+            "(discontinuita' pesata, fuori dal v1) — dichiara le forme "
+            "entrambe step o entrambe continue."
+        )
+
+    def value(t: float) -> float:
+        va = _form_at(forms[0], t)
+        vb = _form_at(forms[1], t)
+        vw = _form_at(forms[2], t)
+        return va + (vb - va) * vw
+
+    times = sorted({
+        t for kind, data, _ in forms if kind != "scalar" for t, _ in data
+    })
+    if kinds == {"step"}:
+        return {"type": "step", "points": [[t, value(t)] for t in times]}
+    exact = all(
+        curve == 1.0 for kind, _, curve in forms if kind == "linear"
+    ) and (
+        forms[2][0] == "scalar"
+        or (forms[0][0] == "scalar" and forms[1][0] == "scalar")
+    )
+    if exact or len(times) < 2:
+        return [[t, value(t)] for t in times]
+    return _mix_adaptive(value, times)
+
+
+def _mix_adaptive(value, times: list) -> list:
+    """Breakpoint lineari adattivi di ``value`` sui segmenti di ``times``."""
+    samples = [(t, value(t)) for t in times]
+    mids = [
+        ((t0 + t1) / 2, value((t0 + t1) / 2))
+        for (t0, _), (t1, _) in zip(samples, samples[1:])
+    ]
+    ys = [y for _, y in samples] + [y for _, y in mids]
+    span = max(ys) - min(ys)
+    tol = max(span * _MIX_REL_TOL, 1e-9)
+    out = [samples[0]]
+
+    def refine(t0, y0, t1, y1, depth):
+        tm = (t0 + t1) / 2
+        ym = value(tm)
+        if abs(ym - (y0 + y1) / 2) <= tol or depth >= _MIX_MAX_DEPTH:
+            out.append((t1, y1))
+            return
+        refine(t0, y0, tm, ym, depth + 1)
+        refine(tm, ym, t1, y1, depth + 1)
+
+    for (t0, y0), (t1, y1) in zip(samples, samples[1:]):
+        refine(t0, y0, t1, y1, 0)
+    return [[t, y] for t, y in out]
+
+
+def _rebuild(v: Any) -> Any:
+    """Copia del risultato con i float arrotondati a 9 decimali."""
+    if isinstance(v, complex):
+        raise ValueError(
+            "expr: risultato complesso (potenza frazionaria di un negativo?) "
+            "— le espressioni producono solo reali."
+        )
+    if isinstance(v, float):
+        return round(v, 9)
+    if isinstance(v, int):
+        return v
+    if isinstance(v, dict):
+        return {**v, "points": [[_rebuild(t), _rebuild(y)] for t, y in v["points"]]}
+    return [_rebuild(x) for x in v]

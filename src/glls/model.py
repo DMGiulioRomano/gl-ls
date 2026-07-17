@@ -18,6 +18,13 @@ STACK_RESERVED = ("seed", "unit")
 GEN_MARKERS = ("values", "ramp", "base")
 BAND_KEYS = frozenset({"base", "range", "n", "seed", "distribution", "drift"})
 
+# Marcatori di strategy riconosciuti come suffisso terminale di una chiave
+# puntata di ``spread.over`` (granstudies ``spread._STRATEGY_MARKERS``).
+OVER_MARKERS = frozenset({
+    "values", "ramp", "base", "range", "seed", "distribution", "drift",
+    "expr", "let", "n",
+})
+
 
 @dataclass
 class AxisInfo:
@@ -91,6 +98,108 @@ class StudyModel:
                 counts[o] = comb(n, o)
         return counts or None
 
+
+
+def split_over_key(key: Any, value: Any) -> Optional[Tuple[str, str]]:
+    """(path, marcatore) se una chiave di ``spread.over`` va splittata.
+
+    Split solo se la chiave e' puntata, l'ultimo segmento e' un marcatore di
+    strategy e il valore NON e' un dict: un valore-dict e' gia' una strategy
+    completa e la chiave resta un path intero (cosi' ``axes.density.base:
+    {expr: ...}`` — path che finisce davvero in ``base`` — non viene spezzato
+    sul ``base`` finale).
+    """
+    if not isinstance(key, str) or "." not in key or isinstance(value, dict):
+        return None
+    head, _, last = key.rpartition(".")
+    if head and last in OVER_MARKERS:
+        return head, last
+    return None
+
+
+@dataclass
+class OverEntry:
+    """Una strategy di ``spread.over`` dopo l'espansione delle chiavi puntate.
+
+    ``strategy`` e' il dict fuso dei frammenti; resta il valore grezzo quando
+    il path porta un valore non-dict non splittabile (errore a valle).
+    ``doc_keys`` sono le chiavi del documento che contribuiscono, in ordine;
+    ``marker_keys`` mappa ogni marcatore portato da un frammento puntato alla
+    sua chiave (per puntare le diagnostiche sulla riga giusta); ``whole_key``
+    e' la chiave della forma non splittata (== path), se presente.
+    """
+
+    path: str
+    strategy: Any = None
+    doc_keys: List[str] = field(default_factory=list)
+    marker_keys: Dict[str, str] = field(default_factory=dict)
+    whole_key: Optional[str] = None
+
+
+def _merge_strategy(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    result = dict(base)
+    for k, v in override.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = _merge_strategy(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
+def expand_over(over: Dict[str, Any]) -> Dict[str, OverEntry]:
+    """Espande le chiavi puntate di ``spread.over`` fondendo i frammenti.
+
+    Stessa semantica di granstudies ``spread._expand_over_dotted``: una chiave
+    che termina con un marcatore e ha valore non-dict diventa ``{path:
+    {marcatore: valore}}``; piu' frammenti sullo stesso path (es. la banda su
+    tre righe ``.base``/``.range``/``.seed``) si fondono in un'unica strategy,
+    nell'ordine di dichiarazione (l'ultimo vince sui conflitti di foglia).
+    """
+    out: Dict[str, OverEntry] = {}
+    for key, value in over.items():
+        split = split_over_key(key, value)
+        if split is not None:
+            path, marker = split
+            contribution: Any = {marker: value}
+        else:
+            path, marker = str(key), None
+            contribution = value
+        e = out.setdefault(path, OverEntry(path=path))
+        e.doc_keys.append(str(key))
+        if marker is not None:
+            e.marker_keys[marker] = str(key)
+        else:
+            e.whole_key = str(key)
+        if isinstance(contribution, dict):
+            merged = e.strategy if isinstance(e.strategy, dict) else {}
+            e.strategy = _merge_strategy(merged, contribution)
+        else:
+            e.strategy = contribution
+    return out
+
+
+def _is_expr_node(spec: Any) -> bool:
+    return isinstance(spec, dict) and "expr" in spec
+
+
+def _eval_spread_n(node: Dict[str, Any]) -> Optional[int]:
+    """``spread.n`` da nodo-expr (percorso-v1), valutato col solo ``let``.
+
+    Tollerante: se l'espressione non risolve staticamente (nomi di percorso non
+    in scope) o non da' un intero >= 1, ritorna None e il conteggio si cerca
+    nelle strategy di ``over``."""
+    from . import exprlang
+
+    try:
+        text, let = exprlang.parse_expr_node(node)
+        out = exprlang.eval_expr(text, dict(let))
+    except ValueError:
+        return None
+    if isinstance(out, float) and out.is_integer():
+        out = int(out)
+    if isinstance(out, int) and not isinstance(out, bool) and out >= 1:
+        return out
+    return None
 
 
 def ramp_count(cfg: Dict[str, Any]) -> Optional[int]:
@@ -186,19 +295,20 @@ def build(doc: Document) -> StudyModel:
             is_spread = isinstance(spread, dict)
             n = None
             if is_spread:
-                n = spread.get("n") if isinstance(spread.get("n"), int) else None
+                decl = spread.get("n")
+                if isinstance(decl, int) and not isinstance(decl, bool):
+                    n = decl
+                elif _is_expr_node(decl):
+                    n = _eval_spread_n(decl)
                 if n is None:
                     over = spread.get("over")
                     if isinstance(over, dict):
-                        for strat in over.values():
-                            if isinstance(strat, dict):
-                                _, owned = y_generator_of(strat)
+                        for oe in expand_over(over).values():
+                            if isinstance(oe.strategy, dict):
+                                _, owned = y_generator_of(oe.strategy)
                                 if owned:
                                     n = owned
                                     break
-                            elif isinstance(strat, list):
-                                n = len(strat)
-                                break
             m.streams[name] = StreamInfo(
                 name=name, cfg=cfg, doc_path=("streams", name),
                 is_spread=is_spread, spread_n=n,

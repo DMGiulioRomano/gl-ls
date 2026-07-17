@@ -304,6 +304,215 @@ def test_unknown_pitch_like_path_warns():
     assert "unknown-path" in codes(text)
 
 
+# ---------------------------------------------------------------------------
+# spread.over: chiavi puntate (issue #3)
+
+
+def _spread(over_block, n_line=""):
+    body = n_line + "      over:\n" + over_block
+    return BASE + "streams:\n  fan:\n    spread:\n" + body
+
+
+def test_spread_dotted_values_clean():
+    text = _spread("        base.pointer.start.values: [0.1, 0.25, 0.4]\n")
+    assert diags_of(text) == []
+
+
+def test_spread_dotted_values_owns_count():
+    text = _spread("        base.onset.values: [0, 1, 2]\n", "      n: 4\n")
+    assert "spread-count" in codes(text)
+
+
+def test_spread_dotted_values_no_false_no_n():
+    # prima del supporto: 'spread-no-n' anche se la forma puntata possiede n
+    text = _spread("        base.onset.values: [0, 1, 2]\n")
+    assert "spread-no-n" not in codes(text)
+
+
+def test_spread_dotted_band_three_lines_clean():
+    text = _spread(
+        "        base.onset.base: 2\n"
+        "        base.onset.range: 3\n"
+        "        base.onset.seed: 42\n",
+        "      n: 5\n",
+    )
+    assert diags_of(text) == []
+
+
+def test_spread_dotted_band_n_owns_count():
+    text = _spread(
+        "        base.onset.base: 2\n"
+        "        base.onset.n: 5\n",
+    )
+    assert "spread-no-n" not in codes(text)
+    conflict = _spread(
+        "        base.onset.base: 2\n"
+        "        base.onset.n: 5\n",
+        "      n: 4\n",
+    )
+    assert "spread-count" in codes(conflict)
+
+
+def test_spread_dotted_conflict_two_generators():
+    text = _spread(
+        "        base.onset.values: [1, 2]\n"
+        '        base.onset.expr: "i"\n',
+    )
+    ds = diags_of(text)
+    d = next(d for d in ds if d.code == "spread-strategy")
+    assert "base.onset.values" in d.message
+    assert "base.onset.expr" in d.message
+
+
+def test_spread_bare_scalar_needs_strategy():
+    text = _spread("        base.onset: 5\n", "      n: 2\n")
+    assert "spread-strategy" in codes(text)
+
+
+def test_spread_bare_list_needs_strategy():
+    # prima passava in silenzio (e il conteggio veniva dalla lista nuda)
+    text = _spread("        base.onset: [0, 1, 2]\n")
+    assert "spread-strategy" in codes(text)
+
+
+def test_spread_dotted_unknown_axis():
+    text = _spread("        axes.densty.baseline.values: [1, 2]\n")
+    assert "unknown-axis" in codes(text)
+
+
+def test_spread_dotted_bad_head_warns_on_effective_path():
+    text = _spread("        pointer.start.values: [1, 2]\n")
+    ds = diags_of(text)
+    d = next(d for d in ds if d.code == "over-path")
+    assert "'pointer.start'" in d.message
+
+
+def test_spread_dotted_ramp_non_dict_is_error():
+    text = _spread("        base.onset.ramp: [1, 2]\n", "      n: 2\n")
+    assert "ramp-type" in codes(text)
+
+
+def test_spread_dotted_negative_range_span_on_range_line():
+    text = _spread(
+        "        base.onset.base: 2\n"
+        "        base.onset.range: -3\n",
+        "      n: 2\n",
+    )
+    ds = diags_of(text)
+    d = next(d for d in ds if d.code == "negative-range")
+    lines = text.splitlines()
+    row = next(i for i, l in enumerate(lines) if "base.onset.range" in l)
+    assert d.range.start.line == row
+
+
+def test_spread_dotted_expr_evaluated():
+    text = _spread('        base.onset.expr: "1/(n-5)"\n', "      n: 5\n")
+    assert "expr" in codes(text)
+
+
+def test_spread_dotted_expr_valid_clean():
+    text = _spread('        base.onset.expr: "i * 2"\n', "      n: 3\n")
+    assert diags_of(text) == []
+
+
+def test_spread_dotted_expr_functions_clean():
+    text = _spread('        base.onset.expr: "floor(i / 2)"\n', "      n: 4\n")
+    assert diags_of(text) == []
+
+
+def test_spread_mixed_dotted_expr_nested_let_clean():
+    text = _spread(
+        '        base.onset.expr: "v * i"\n'
+        "        base.onset:\n"
+        "          let: {v: 2}\n",
+        "      n: 3\n",
+    )
+    assert diags_of(text) == []
+
+
+def test_spread_dotted_expr_reserved_names():
+    text = _spread(
+        '        base.onset.expr: "i"\n'
+        "        base.onset:\n"
+        "          let: {i: 1}\n",
+        "      n: 3\n",
+    )
+    assert "expr-reserved" in codes(text)
+
+
+def test_spread_nested_expr_band_let_clean():
+    # parita' col runtime: la banda-let (variabile random per-stream) e'
+    # ammessa nella strategy expr dello spread
+    text = _spread(
+        "        base.onset:\n"
+        '          expr: "v * i"\n'
+        "          let:\n"
+        "            v: {base: 1, range: 2}\n",
+        "      n: 3\n",
+    )
+    assert diags_of(text) == []
+
+
+def test_spread_band_let_wrong_marker():
+    text = _spread(
+        "        base.onset:\n"
+        '          expr: "v * i"\n'
+        "          let:\n"
+        "            v: {values: [1, 2]}\n",
+        "      n: 2\n",
+    )
+    assert "expr-let-band" in codes(text)
+
+
+def test_spread_band_let_with_n_rejected():
+    text = _spread(
+        "        base.onset:\n"
+        '          expr: "v * i"\n'
+        "          let:\n"
+        "            v: {base: 1, n: 4}\n",
+        "      n: 4\n",
+    )
+    assert "expr-let-band" in codes(text)
+
+
+def test_spread_n_expr_node_not_bad_n():
+    # percorso-v1: spread.n puo' essere un nodo-expr
+    text = _spread(
+        "        base.onset:\n"
+        "          ramp: {start: 0, step: 2}\n",
+        '      n: {expr: "k * 2", let: {k: 2}}\n',
+    )
+    assert "bad-n" not in codes(text)
+    assert diags_of(text) == []
+
+
+def test_spread_n_expr_counts_against_owned():
+    text = _spread(
+        "        base.onset.values: [0, 1, 2]\n",
+        '      n: {expr: "k * 2", let: {k: 2}}\n',
+    )
+    assert "spread-count" in codes(text)
+
+
+def test_spread_n_expr_non_integer_result():
+    text = _spread(
+        "        base.onset:\n"
+        "          ramp: {start: 0, step: 2}\n",
+        '      n: {expr: "0.5"}\n',
+    )
+    assert "bad-n" in codes(text)
+
+
+def test_spread_n_expr_in_n_scope_is_unknown():
+    # in spread.n il runtime non fornisce i/n: un nome fuori dal let e' ignoto
+    text = _spread(
+        "        base.onset:\n"
+        "          ramp: {start: 0, step: 2}\n",
+        '      n: {expr: "i + 1"}\n',
+    )
+    assert "expr" in codes(text)
+
+
 def test_pitch_dotted_path_is_known():
     text = BASE.replace("path: density", "path: pitch.semitones")
     assert "unknown-path" not in codes(text)

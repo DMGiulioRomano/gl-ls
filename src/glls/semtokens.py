@@ -12,7 +12,7 @@ from typing import List, Optional, Tuple
 
 from . import engine_info as EI
 from . import schema
-from .model import AXES_RESERVED, STACK_RESERVED, StudyModel
+from .model import AXES_RESERVED, STACK_RESERVED, StudyModel, split_over_key
 from .yamlpos import Document
 
 TOKEN_TYPES = [
@@ -70,10 +70,19 @@ def tokens(doc: Document, m: StudyModel) -> List[int]:
         # chiavi
         if entry.key_span is not None and isinstance(path[-1], str):
             ctx = schema.context_for_path(path[:-1])
-            tok = _classify_key(path, ctx, path[-1])
-            if tok is not None:
-                ks = entry.key_span
-                if ks.start_line == ks.end_line:
+            key = path[-1]
+            ks = entry.key_span
+            split = (split_over_key(key, doc.get(path)) if ctx == "over" else None)
+            if split is not None and ks.start_line == ks.end_line:
+                # chiave puntata splittata: path come property, marcatore come
+                # macro (il '.' di separazione resta senza token)
+                head, marker = split
+                raw.append((ks.start_line, ks.start_col, len(head), _T["property"]))
+                raw.append((ks.start_line, ks.start_col + len(head) + 1,
+                            len(marker), _T["macro"]))
+            else:
+                tok = _classify_key(path, ctx, key)
+                if tok is not None and ks.start_line == ks.end_line:
                     raw.append((ks.start_line, ks.start_col,
                                 ks.end_col - ks.start_col, tok))
         # valori scalari
