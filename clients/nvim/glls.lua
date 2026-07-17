@@ -59,3 +59,9 @@ end
 --   vim.lsp.inlay_hint.enable(true)                  -- conversioni hz/s/bpm inline
 --   vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action)  -- i ricalcoli
 --   vim.keymap.set("n", "K", vim.lsp.buf.hover)
+
+-- Semantic token: funzionano senza config. streams (namespace) e spread
+-- (decorator) prendono gia' colori distinti dai default di Neovim. Le sezioni
+-- axes/stack/base (struct) invece ricadono su Type, lo stesso dei nomi d'asse.
+-- Scommenta per distinguerle (adatta il colore al tuo colorscheme):
+--   vim.api.nvim_set_hl(0, "@lsp.type.struct.yaml", { link = "Special" })

@@ -44,3 +44,9 @@ Funziona tutto out-of-the-box: diagnostica (`vim.diagnostic`), completamento
 (nvim-cmp / omnifunc), hover (`K`), code action (`vim.lsp.buf.code_action`,
 dove vivono i ricalcoli hz/s/bpm e il riscala della duration), inlay hint,
 semantic tokens, simboli, references.
+
+I semantic token distinguono `axes`/`stack`/`base` (struct), `streams`
+(namespace) e `spread` (decorator) dalle altre chiavi. Neovim colora gia'
+`streams` e `spread` in modo distinto; le sezioni `axes`/`stack`/`base`
+ricadono sullo stesso colore dei nomi d'asse (`Type`) — vedi in fondo a
+`glls.lua` l'override commentato per separarle.
