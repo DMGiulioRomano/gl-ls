@@ -9,6 +9,7 @@ vengono materializzati da ``actions.py``.
 from __future__ import annotations
 
 import difflib
+import itertools
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from lsprotocol import types
@@ -429,6 +430,13 @@ def _check_sweep(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath) -> None
         for i, ordering in enumerate(orderings):
             if not isinstance(ordering, list):
                 continue
+            if len(ordering) < 2:
+                bag.add(spath + ("orderings", i),
+                        f"orderings: la voce {ordering!r} ha meno di 2 assi; "
+                        "un ordering e' una sequenza lento->veloce e richiede "
+                        "almeno 2 assi. Per muovere un solo asse usa "
+                        "'orders: [1]'.",
+                        code="ordering-min-axes", prefer_value=True)
             seen: set = set()
             for j, ax in enumerate(ordering):
                 if names and ax not in names:
@@ -444,6 +452,32 @@ def _check_sweep(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath) -> None
                             f"orderings: asse duplicato '{ax}'.",
                             code="dup-axis", prefer_value=True)
                 seen.add(ax)
+
+    # Ridondanza di ``orders`` esplicito rispetto a ``orderings`` (regola di
+    # study_spec._validate): con orderings popolato, un ``orders`` scritto che
+    # non aggiunge nessuna combinazione automatica nuova — dedup per sequenza
+    # esatta, non per set — non fa nulla ed e' errore al parse. Copre sia
+    # ``orders: []`` sia un ``orders: [k]`` interamente deduplicato.
+    has_orderings = (isinstance(orderings, list)
+                     and any(isinstance(o, list) and o for o in orderings))
+    if isinstance(orders, list) and has_orderings:
+        decl = list(m.axes)
+        ordering_seqs = {tuple(o) for o in orderings if isinstance(o, list)}
+        auto_seqs = {
+            combo
+            for o in orders
+            if isinstance(o, int) and o > 0
+            for combo in itertools.combinations(decl, o)
+        }
+        if not (auto_seqs - ordering_seqs):
+            bag.add(spath + ("orders",),
+                    "sweep.orders e' ridondante: con 'orderings' popolato non "
+                    "aggiunge nessuna combinazione automatica nuova (dedup per "
+                    "sequenza esatta). Rimuovi 'orders' oppure indica ordini "
+                    "che generino combinazioni non gia' negli orderings.",
+                    code="orders-redundant",
+                    data={"fix": {"kind": "remove-key",
+                                  "path": list(spath + ("orders",))}})
 
 
 def _check_stack(bag: Bag, doc: Document, m: StudyModel, prefix: KeyPath) -> None:
