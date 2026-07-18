@@ -744,3 +744,88 @@ def test_spread_static_let_nested_expr_error_on_expr():
     )
     ds = diags_of(text)
     assert any(d.code == "expr" and "let.k" in d.message for d in ds)
+
+
+# --- issue #9: chiavi puntate negli override di stream ----------------------
+
+
+def test_dotted_override_key_valid_no_unknown_key():
+    # la forma della issue: chiave puntata top-level accanto a un'entry-spread
+    text = BASE + """streams:
+  zona:
+    axes.density.ramp.step: 1
+    sweep: {}
+    spread:
+      over:
+        base.pointer.start.values: [0.1, 0.25, 0.4]
+"""
+    assert diags_of(text) == []
+
+
+def test_dotted_override_key_into_base_valid():
+    text = BASE + """streams:
+  v1:
+    base.grain.duration: 0.02
+"""
+    assert "unknown-key" not in codes(text)
+
+
+def test_dotted_override_key_bad_first_segment():
+    text = BASE + """streams:
+  v1:
+    axs.density.values: [1, 2]
+"""
+    ds = diags_of(text)
+    d = next(d for d in ds if d.code == "unknown-key")
+    assert "'axs'" in d.message and "stream_override" in d.message
+    assert d.data["fix"]["new"] == "axes.density.values"
+
+
+def test_dotted_override_key_bad_inner_segment():
+    text = BASE + """streams:
+  v1:
+    axes.density.rampp.step: 1
+"""
+    ds = diags_of(text)
+    d = next(d for d in ds if d.code == "unknown-key")
+    assert "'rampp'" in d.message and "'axis'" in d.message
+    assert d.data["fix"]["new"] == "axes.density.ramp.step"
+
+
+def test_dotted_override_mixed_nested_form_clean():
+    # chiave puntata che apre una mapping: i figli vivono nel contesto della
+    # forma annidata (ramp), non in root
+    text = BASE + """streams:
+  v1:
+    axes.density.ramp:
+      step: 1
+"""
+    assert "unknown-key" not in codes(text)
+
+
+def test_dotted_key_nested_inside_override_block_valid():
+    # l'espansione runtime e' ricorsiva: vale anche dentro i blocchi annidati
+    text = BASE + """streams:
+  v1:
+    base:
+      grain.duration: 0.02
+"""
+    assert "unknown-key" not in codes(text)
+
+
+def test_dotted_key_at_document_root_still_flagged():
+    # fuori dagli override il runtime non espande: la chiave resta letterale
+    text = BASE + "base.grain.duration: 0.02\n"
+    assert "unknown-key" in codes(text)
+
+
+def test_dotted_key_inside_spread_block_still_flagged():
+    # dentro spread niente espansione (il blocco e' consumato prima); le
+    # chiavi puntate di over sono gia' gestite dal contesto aperto 'over'
+    text = BASE + """streams:
+  v1:
+    spread:
+      n: 2
+      over.axes.density: {values: [1, 2]}
+"""
+    assert "unknown-key" in codes(text)
