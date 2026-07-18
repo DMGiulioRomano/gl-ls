@@ -926,6 +926,39 @@ def _check_window_value(bag: Bag, path: KeyPath, env: Any) -> None:
 # Chiavi sconosciute (pass generico sui contesti chiusi)
 
 
+def _dotted_override_zone(path: KeyPath) -> bool:
+    """Zona dove il runtime espande le chiavi puntate: dentro un override di
+    stream, fuori dal ramo ``spread`` (granstudies ``_expand_dotted_keys``
+    gira dopo ``expand_spreads``, quindi il blocco spread non la vede; le
+    chiavi puntate di ``over`` sono path interi con la loro notazione)."""
+    return (len(path) >= 2 and path[0] == "streams"
+            and (len(path) < 3 or path[2] != "spread"))
+
+
+def _check_dotted_key(bag: Bag, base: KeyPath, key: str) -> None:
+    """Valida una chiave puntata di override segmento per segmento, ognuno
+    nel contesto della forma annidata equivalente (``axes.density.ramp.step``:
+    ``axes`` in stream_override, ``density`` nome libero, ``ramp`` in axis,
+    ``step`` in ramp)."""
+    parts = key.split(".")
+    for i, seg in enumerate(parts):
+        ctx = schema.context_for_path(base + tuple(parts[:i]))
+        if ctx not in schema.CLOSED_CONTEXTS:
+            continue  # contesto a nomi liberi (axes, stack, ...)
+        allowed = [k.name for k in schema.keys_for(ctx)]
+        if seg in allowed:
+            continue
+        sug = _suggest(seg, allowed)
+        fixed = ".".join(parts[:i] + [sug] + parts[i + 1:]) if sug else None
+        extra = f" Forse intendevi '{fixed}'?" if fixed else ""
+        bag.add(base + (key,),
+                f"Chiave puntata '{key}': segmento '{seg}' non previsto nel "
+                f"contesto '{ctx}'.{extra}",
+                types.DiagnosticSeverity.Warning, code="unknown-key",
+                data={"fix": {"kind": "rename", "new": fixed}} if fixed else None)
+        return
+
+
 def _check_unknown_keys(bag: Bag, doc: Document) -> None:
     for entry in list(doc.iter_entries()):
         if entry.kind != "mapping":
@@ -943,6 +976,9 @@ def _check_unknown_keys(bag: Bag, doc: Document) -> None:
             # i contesti env/axis condividono il vocabolario banda: gia' coperti
             if ctx == "walk" or (ctx == "axis" and key in ("rand", "cps")):
                 continue  # errori dedicati altrove
+            if "." in key and _dotted_override_zone(entry.path) and all(key.split(".")):
+                _check_dotted_key(bag, entry.path, key)
+                continue
             sug = _suggest(key, allowed)
             extra = f" Forse intendevi '{sug}'?" if sug else ""
             bag.add(entry.path + (key,),
