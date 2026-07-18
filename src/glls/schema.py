@@ -474,6 +474,25 @@ def _env_context(rest: KeyPath) -> str:
     return "value"
 
 
+def _expand_dotted(rest: KeyPath) -> KeyPath:
+    """Espande i segmenti puntati di un path di override nella forma annidata.
+
+    ``("axes.density.ramp", "step")`` -> ``("axes", "density", "ramp",
+    "step")``: la notazione a chiave puntata che il runtime espande negli
+    override di stream (granstudies ``study_spec._expand_dotted_keys``),
+    cosi' il contesto e' quello della forma annidata equivalente.
+    """
+    if not any(isinstance(s, str) and "." in s for s in rest):
+        return rest
+    out: List[object] = []
+    for seg in rest:
+        if isinstance(seg, str) and "." in seg:
+            out.extend(seg.split("."))
+        else:
+            out.append(seg)
+    return tuple(out)
+
+
 def context_for_path(path: KeyPath) -> str:
     """Contesto schema di un key-path concreto del documento."""
     path = tuple(path)
@@ -486,6 +505,11 @@ def context_for_path(path: KeyPath) -> str:
         if len(path) == 2:
             return "stream_override"
         sub = path[2:]
+        # la notazione puntata degli override equivale alla forma annidata;
+        # il sottoalbero ``spread`` resta com'e' (viene consumato prima
+        # dell'espansione runtime e le chiavi di ``over`` sono path interi)
+        if sub[0] != "spread":
+            sub = _expand_dotted(sub)
         if sub[0] == "spread":
             if len(sub) == 1:
                 return "spread"
