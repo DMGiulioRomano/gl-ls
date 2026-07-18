@@ -138,6 +138,71 @@ def test_sweep_orderings_unknown_axis():
     assert "unknown-axis" in codes(text)
 
 
+TWO_AXES = BASE + """  grain_duration:
+    path: grain.duration
+    baseline: 5
+    values: [2, 8]
+"""
+
+
+def test_ordering_min_two_axes():
+    text = TWO_AXES + "sweep:\n  orderings:\n    - [density]\n"
+    assert "ordering-min-axes" in codes(text)
+
+
+def test_ordering_two_axes_ok():
+    text = TWO_AXES + "sweep:\n  orderings:\n    - [density, grain_duration]\n"
+    assert "ordering-min-axes" not in codes(text)
+
+
+def test_orders_empty_with_orderings_redundant():
+    text = (TWO_AXES
+            + "sweep:\n  orders: []\n  orderings:\n"
+            + "    - [density, grain_duration]\n")
+    assert "orders-redundant" in codes(text)
+
+
+def test_orders_fully_deduped_by_orderings():
+    # orders: [2] genera solo (density, grain_duration), gia' negli orderings
+    # per sequenza esatta -> ridondante.
+    text = (TWO_AXES
+            + "sweep:\n  orders: [2]\n  orderings:\n"
+            + "    - [density, grain_duration]\n")
+    assert "orders-redundant" in codes(text)
+
+
+def test_orders_not_redundant_if_adds_combos():
+    # orders: [1] aggiunge (density,) e (grain_duration,): non ridondante.
+    text = (TWO_AXES
+            + "sweep:\n  orders: [1]\n  orderings:\n"
+            + "    - [density, grain_duration]\n")
+    assert "orders-redundant" not in codes(text)
+
+
+def test_orders_dedup_is_by_exact_sequence():
+    # L'ordering e' la permutazione inversa della combinazione automatica:
+    # per sequenza esatta NON e' un duplicato, quindi orders: [2] resta valido.
+    text = (TWO_AXES
+            + "sweep:\n  orders: [2]\n  orderings:\n"
+            + "    - [grain_duration, density]\n")
+    assert "orders-redundant" not in codes(text)
+
+
+def test_orders_empty_without_orderings_valid():
+    text = TWO_AXES + "sweep:\n  orders: []\n"
+    assert "orders-redundant" not in codes(text)
+
+
+def test_sweep_counts_default_conditioned_by_orderings():
+    doc = yamlpos.parse(
+        TWO_AXES + "sweep:\n  orderings:\n    - [density, grain_duration]\n")
+    m = model.build(doc)
+    assert m.sweep_counts() is None
+    doc = yamlpos.parse(TWO_AXES + "sweep:\n  plateau: 5\n")
+    m = model.build(doc)
+    assert m.sweep_counts() == {1: 2, 2: 1}
+
+
 def test_ramp_step_positive():
     text = BASE.replace("values: [10, 30]",
                         "ramp: {start: 1, stop: 5, step: 0}")

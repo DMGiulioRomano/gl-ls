@@ -91,7 +91,14 @@ class StudyModel:
         n = len(self.axes)
         if n == 0:
             return None
-        orders = self.sweep.get("orders", list(range(1, n + 1)))
+        # Default condizionato da ``orderings`` (study_spec): con orderings
+        # popolato e ``orders`` assente il runtime non genera automatiche
+        # ([]); senza orderings resta il default storico [1..n].
+        orderings = self.sweep.get("orderings")
+        has_orderings = (isinstance(orderings, list)
+                         and any(isinstance(o, list) and o for o in orderings))
+        default = [] if has_orderings else list(range(1, n + 1))
+        orders = self.sweep.get("orders", default)
         if not isinstance(orders, list):
             return None
         for o in orders:
