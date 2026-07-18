@@ -707,6 +707,19 @@ def test_generator_in_let_still_flagged():
     assert any(d.code == "expr" and "statiche" in d.message for d in ds)
 
 
+def test_variable_named_let_is_container_not_skip_marker():
+    # una variabile del let chiamata 'let': lo skip dei nodi annidati deve
+    # riconoscere 'let' come chiave-contenitore (genitore = nodo-expr), non
+    # come nome di variabile — il nodo annidato resta validato dal contenitore
+    text = BASE.replace(
+        "base:\n",
+        'base:\n  volume:\n    expr: "let - 20"\n    let:\n'
+        "      env: [[0, 1], [0.1583, 1.5]]\n"
+        '      let: {expr: "min(env, 1.2)"}\n',
+    )
+    assert not any(d.code == "expr" for d in diags_of(text))
+
+
 def test_spread_static_let_nested_expr_clean():
     # nella strategy expr dello spread il nodo annidato convive con la
     # banda-let e vede i nomi iniettati (i, n, pescaggi)

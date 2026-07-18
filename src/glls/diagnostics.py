@@ -968,8 +968,13 @@ def _check_expr_nodes(bag: Bag, doc: Document, m: StudyModel) -> None:
         # un nodo-expr annidato dentro il 'let' di un altro nodo-expr non e'
         # standalone: lo valida (parse ricorsivo) e lo risolve (lazy, con i
         # fratelli in scope) il nodo contenitore — qui darebbe falsi 'nome
-        # ignoto' sui riferimenti ai fratelli.
-        if "let" in p:
+        # ignoto' sui riferimenti ai fratelli. Il match e' su 'let' come chiave
+        # contenitore (il cui genitore e' un nodo-expr), non come nome di
+        # variabile: cosi' una variabile chiamata 'let' non e' un falso skip.
+        if any(
+            seg == "let" and i + 1 < len(p) and exprlang.is_expr_node(doc.get(p[:i]))
+            for i, seg in enumerate(p)
+        ):
             continue
         value = doc.get(p)
         if not exprlang.is_expr_node(value):
