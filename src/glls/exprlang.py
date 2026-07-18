@@ -11,6 +11,15 @@ stessa operazione o chiamata sono un errore — tranne ``mix(A, B, w)``,
 l'unica porta Env con Env (morphing pesato, campionato sull'unione dei
 tempi). Modulo puro, solo stdlib.
 
+I valori di ``let`` sono scalari, forme statiche di Env, oppure altri
+nodi-expr (granulation-studies #28): un nodo annidato si risolve *lazy* alla
+prima referenza, contro lo scope che lo contiene — i fratelli dello stesso
+``let`` piu' i nomi esterni (``i``/``n``, bande-let). L'ordine di
+dichiarazione non conta; un ``let`` proprio del nodo annidato apre uno scope
+figlio lessicale (i nomi interni ombreggiano gli esterni); i cicli sono un
+errore esplicito, con guardia di profondita' ``_MAX_LET_DEPTH`` sia
+sull'annidamento sintattico (parse) sia sulla catena di dipendenze (eval).
+
 Unica divergenza voluta dal runtime: la guardia ``_safe_pow`` (potenze fuori
 scala rifiutate) protegge il processo del server; il runtime usa la potenza
 nuda.
@@ -70,12 +79,32 @@ _FUNCTIONS = {
 
 _NODE_KEYS = frozenset({"expr", "let"})
 
+# Guardia di profondita' degli expr annidati in ``let`` (granulation-studies
+# #28): vale sia per l'annidamento sintattico (let dentro let, al parse) sia
+# per la catena di dipendenze in risoluzione (all'eval). Stessa soglia del
+# runtime (= MAX_ENV_DEPTH dei generatori annidati).
+_MAX_LET_DEPTH = 8
+
 
 def is_expr_node(spec: Any) -> bool:
     return isinstance(spec, dict) and "expr" in spec
 
 
-def parse_expr_node(spec: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+def parse_expr_node(
+    spec: Dict[str, Any], *, _depth: int = 0
+) -> Tuple[str, Dict[str, Any]]:
+    """``(testo, let)`` del nodo-expr, validati.
+
+    ``let`` e' opzionale; i suoi valori sono scalari, forme statiche di Env,
+    oppure altri nodi-expr (validati qui ricorsivamente, risolti all'eval) —
+    un nodo-generatore dentro ``let`` resta vietato (eccezione: le bande-let
+    della strategy expr dello spread, estratte prima di questo parse).
+    """
+    if _depth > _MAX_LET_DEPTH:
+        raise ValueError(
+            f"nodo-expr: profondita' di annidamento in 'let' oltre "
+            f"{_MAX_LET_DEPTH} — config degenere (alias YAML ricorsivo?)."
+        )
     extra = set(spec) - _NODE_KEYS
     if extra:
         raise ValueError(
@@ -91,20 +120,116 @@ def parse_expr_node(spec: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
     if not isinstance(let, dict):
         raise ValueError(f"nodo-expr: 'let' deve essere un dict (ricevuto {let!r}).")
     for name, value in let.items():
-        _checked(name, value)
+        if is_expr_node(value):
+            try:
+                parse_expr_node(value, _depth=_depth + 1)
+            except ValueError as exc:
+                raise _let_error(name, exc) from None
+        else:
+            _checked(name, value)
     return text, dict(let)
 
 
 def eval_expr(text: str, scope: Mapping[str, Any]) -> Any:
+    """Valuta ``text`` nello ``scope``: scalare o Env (elementwise sulle y).
+
+    I valori di scope che sono nodi-expr si risolvono alla prima referenza
+    (vedi ``_LetScope``).
+    """
+    if not isinstance(scope, _LetScope):
+        scope = _LetScope(scope)
+    return _rebuild(_eval_text(text, scope))
+
+
+def _eval_text(text: str, scope: "_LetScope") -> Any:
+    """Il valore grezzo di ``text`` (senza rebuild: usato anche dai nodi annidati)."""
     try:
         tree = ast.parse(text, mode="eval")
     except SyntaxError as exc:
         raise ValueError(f"expr: sintassi non valida in {text!r}: {exc.msg}.") from exc
     try:
-        out = _eval(tree.body, scope)
+        return _eval(tree.body, scope)
     except ZeroDivisionError:
         raise ValueError(f"expr: divisione o modulo per zero in {text!r}.") from None
-    return _rebuild(out)
+
+
+def _let_error(name: str, exc: ValueError) -> ValueError:
+    """L'errore di un nodo annidato, col nome della variabile di ``let``."""
+    msg = str(exc)
+    for prefix in ("expr: ", "nodo-expr: "):
+        if msg.startswith(prefix):
+            msg = msg[len(prefix):]
+            break
+    return ValueError(f"expr: let.{name}: {msg}")
+
+
+class _LetScope:
+    """Scope con risoluzione lazy dei nodi-expr legati in ``let``.
+
+    Port di ``granstudies.expr._LetScope``: un valore di scope che e' a sua
+    volta un nodo-expr si valuta alla prima referenza, contro lo scope che lo
+    contiene (fratelli dello stesso ``let`` piu' la catena esterna, compresi
+    i nomi dinamici come ``i``/``n`` e le bande-let). Un ``let`` proprio del
+    nodo annidato apre uno scope figlio lessicale. Lo stack di risoluzione,
+    condiviso lungo la catena, rileva i cicli — chiave ``(scope, nome)``,
+    cosi' l'ombreggiatura tra livelli diversi non produce falsi cicli — e fa
+    da guardia di profondita'. I risultati sono memoizzati per binding.
+    """
+
+    def __init__(
+        self, bindings: Mapping[str, Any], parent: "_LetScope | None" = None
+    ):
+        self._bindings = bindings
+        self._parent = parent
+        self._cache: Dict[str, Any] = {}
+        self._stack: list = parent._stack if parent is not None else []
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._bindings or (
+            self._parent is not None and name in self._parent
+        )
+
+    def __iter__(self):
+        # L'unione dei nomi visibili, per gli elenchi nei messaggi d'errore.
+        yield from self._bindings
+        if self._parent is not None:
+            for name in self._parent:
+                if name not in self._bindings:
+                    yield name
+
+    def __getitem__(self, name: str) -> Any:
+        if name not in self._bindings:
+            if self._parent is None:
+                raise KeyError(name)
+            return self._parent[name]
+        if name in self._cache:
+            return self._cache[name]
+        value = self._bindings[name]
+        if is_expr_node(value):
+            value = self._resolve(name, value)
+        self._cache[name] = value
+        return value
+
+    def _resolve(self, name: str, node: Dict[str, Any]) -> Any:
+        key = (id(self), name)
+        if key in self._stack:
+            chain = [n for _, n in self._stack[self._stack.index(key):]]
+            chain.append(name)
+            raise ValueError(f"expr: ciclo nel let ({' -> '.join(chain)}).")
+        if len(self._stack) >= _MAX_LET_DEPTH:
+            chain = " -> ".join([n for _, n in self._stack] + [name])
+            raise ValueError(
+                f"expr: profondita' della catena di let oltre {_MAX_LET_DEPTH} "
+                f"({chain}) — config degenere."
+            )
+        self._stack.append(key)
+        try:
+            text, let = parse_expr_node(node)
+            return _eval_text(text, _LetScope(let, parent=self))
+        except ValueError as exc:
+            raise _let_error(name, exc) from None
+        finally:
+            self._stack.pop()
 
 
 def _is_scalar(v: Any) -> bool:

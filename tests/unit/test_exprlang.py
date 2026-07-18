@@ -134,3 +134,154 @@ def test_pow_guard_still_active():
     # guardia server-side (assente nel runtime): potenze fuori scala rifiutate
     with pytest.raises(ValueError, match="potenza fuori scala"):
         eval_expr("10 ** 1000", {})
+
+
+# --- expr annidati dentro let (granulation-studies #28) ------------------------
+# parita' con tests/test_expr.py del runtime, commit 983efda
+
+
+def _nested(levels: int):
+    """Un nodo-expr annidato sintatticamente per ``levels`` livelli di let."""
+    node = {"expr": "1"}
+    for _ in range(levels):
+        node = {"expr": "v", "let": {"v": node}}
+    return node
+
+
+def test_parse_expr_node_accepts_nested_expr_in_let():
+    node = {"expr": "b * 2", "let": {"a": 2, "b": {"expr": "a + 1"}}}
+    text, let = parse_expr_node(node)
+    assert text == "b * 2"
+    assert let["b"] == {"expr": "a + 1"}
+
+
+def test_parse_expr_node_validates_nested_node():
+    # le regole del nodo-expr valgono anche annidato: chiavi extra sono errore
+    node = {"expr": "b", "let": {"b": {"expr": "1", "seed": 3}}}
+    with pytest.raises(ValueError, match="seed"):
+        parse_expr_node(node)
+
+
+def test_parse_expr_node_nested_depth_guard():
+    assert parse_expr_node(_nested(8))  # al limite: valido
+    with pytest.raises(ValueError, match="profondit"):
+        parse_expr_node(_nested(9))
+
+
+def test_nested_expr_resolves_sibling():
+    scope = {"a": 2, "b": {"expr": "a + 1"}}
+    assert eval_expr("b * 2", scope) == 6
+
+
+def test_nested_expr_order_independent():
+    # 'b' dichiarato prima di 'a': la risoluzione e' per dipendenze, non
+    # per ordine di dichiarazione
+    scope = {"b": {"expr": "a * 2"}, "a": 3}
+    assert eval_expr("b", scope) == 6
+
+
+def test_nested_expr_chain():
+    scope = {"a": 1, "b": {"expr": "a + 1"}, "c": {"expr": "b * 10"}}
+    assert eval_expr("c + b", scope) == 22
+
+
+def test_nested_expr_env_result_enters_arithmetic():
+    scope = {"env": [[0, 1], [1, 2]], "s": {"expr": "env * 2"}}
+    assert eval_expr("s + 1", scope) == [[0, 3], [1, 5]]
+
+
+def test_nested_expr_own_let_shadows_outer():
+    scope = {"a": 1, "v": {"expr": "a + 1", "let": {"a": 10}}}
+    assert eval_expr("v", scope) == 11
+    # l'ombreggiatura resta locale: fuori 'a' e' ancora quello esterno
+    assert eval_expr("v + a", scope) == 12
+
+
+def test_nested_expr_own_let_inherits_outer_scope():
+    scope = {"k": 5, "v": {"expr": "k + w", "let": {"w": 2}}}
+    assert eval_expr("v", scope) == 7
+
+
+def test_nested_expr_same_name_at_different_levels_is_not_a_cycle():
+    # 'x' esterno dipende da 'm', che ombreggia 'x' nel proprio let:
+    # binding diversi con lo stesso nome, nessun ciclo
+    scope = {
+        "x": {
+            "expr": "m",
+            "let": {"m": {"expr": "x * 2", "let": {"x": {"expr": "5"}}}},
+        },
+    }
+    assert eval_expr("x", scope) == 10
+
+
+def test_nested_expr_cycle_raises():
+    scope = {"a": {"expr": "b"}, "b": {"expr": "a"}}
+    with pytest.raises(ValueError, match="ciclo"):
+        eval_expr("a", scope)
+
+
+def test_nested_expr_self_reference_raises():
+    with pytest.raises(ValueError, match="ciclo"):
+        eval_expr("a", {"a": {"expr": "a * 2"}})
+
+
+def test_nested_expr_shadowing_cannot_reference_shadowed():
+    # un nome ridefinito in un let interno non vede il nome esterno che
+    # ombreggia: e' un auto-riferimento, quindi ciclo
+    scope = {"a": 1, "v": {"expr": "a", "let": {"a": {"expr": "a + 1"}}}}
+    with pytest.raises(ValueError, match="ciclo"):
+        eval_expr("v", scope)
+
+
+def test_nested_expr_dependency_chain_depth_guard():
+    # catena piatta di dipendenze: 8 risoluzioni in volo passano, 9 no
+    ok = {f"v{k}": {"expr": f"v{k + 1} + 1"} for k in range(8)}
+    ok["v8"] = 1
+    assert eval_expr("v0", ok) == 9
+    deep = {f"v{k}": {"expr": f"v{k + 1} + 1"} for k in range(9)}
+    deep["v9"] = 1
+    with pytest.raises(ValueError, match="profondit"):
+        eval_expr("v0", deep)
+
+
+def test_nested_expr_error_names_the_variable():
+    with pytest.raises(ValueError) as exc:
+        eval_expr("v", {"v": {"expr": "boh"}})
+    assert "let.v" in str(exc.value)
+    assert "boh" in str(exc.value)
+
+
+def test_nested_expr_two_env_results_still_rejected():
+    scope = {
+        "e1": {"expr": "env * 2"},
+        "e2": {"expr": "env + 1"},
+        "env": [[0, 1], [1, 2]],
+    }
+    with pytest.raises(ValueError, match="Env"):
+        eval_expr("e1 * e2", scope)
+
+
+def test_nested_expr_feeds_mix():
+    scope = {
+        "a": {"expr": "env"},
+        "env": [[0, 0], [1, 10]],
+    }
+    assert eval_expr("mix(a, 0, 0.5)", scope) == [[0, 0], [1, 5]]
+
+
+def test_nested_expr_generator_in_nested_let_raises():
+    node = {
+        "expr": "v",
+        "let": {"v": {"expr": "w", "let": {"w": {"ramp": {"start": 0, "step": 1}}}}},
+    }
+    with pytest.raises(ValueError, match="statiche"):
+        parse_expr_node(node)
+
+
+def test_nested_expr_result_does_not_alias_scope():
+    env = [[0, 1], [1, 2]]
+    scope = {"env": env, "v": {"expr": "env"}}
+    out = eval_expr("v", scope)
+    assert out == env
+    out[0][1] = 99
+    assert env[0][1] == 1

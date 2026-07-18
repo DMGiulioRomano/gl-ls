@@ -61,8 +61,10 @@ _GEN_DOC = {
             "sagome e scalari. Grammatica: numeri, nomi, `+ - * / **`, meno "
             "unario, parentesi. Env⊙scalare agisce sulle y; Env⊙Env e' "
             "errore. **Sempre tra virgolette.**",
-    "let": "Nomi in scope per `expr`: scalari o forme *statiche* di Env "
-           "(niente nodi-generatore).",
+    "let": "Nomi in scope per `expr`: scalari, forme *statiche* di Env, "
+           "oppure altri nodi-expr `{expr, let}` (risoluzione lazy alla prima "
+           "referenza: l'ordine non conta, un `let` interno ombreggia, i "
+           "cicli sono errore). Niente nodi-generatore.",
     "type": "Interpolazione dei breakpoint dell'Env: `linear` | `step` "
             "(niente cubic nelle bande).",
     "points": "Breakpoint `[[t, v], ...]` con `t` in `[0, 1]`, hold fuori dai bordi.",
@@ -431,7 +433,9 @@ def _engine_context(rest: KeyPath) -> str:
     if not rest:
         return "engine_stream"
     if "let" in rest:
-        return "let"  # i nomi dichiarati in let sono liberi
+        # stesso trattamento dei let negli Env: nomi liberi al primo livello,
+        # contesto ricorsivo dentro i valori (nodi-expr annidati)
+        return _env_context(rest[rest.index("let"):])
     head = rest[0]
     table: Dict[object, str] = {
         "grain": "grain", "pointer": "pointer", "pitch": "pitch",
@@ -461,7 +465,12 @@ def _env_context(rest: KeyPath) -> str:
     if head in _ENV_CHILD:
         return _env_context(rest[1:])
     if head == "let":
-        return "let" if len(rest) == 1 else "value"
+        if len(rest) == 1:
+            return "let"  # i nomi dichiarati in let sono liberi
+        # dentro il valore di una variabile: contesto env ricorsivo, cosi' un
+        # nodo-expr annidato (o una banda-let) ha hover/completion delle sue
+        # chiavi come un nodo top-level
+        return _env_context(rest[2:])
     return "value"
 
 

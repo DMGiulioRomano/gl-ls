@@ -624,3 +624,123 @@ def test_spread_n_expr_in_n_scope_is_unknown():
 def test_pitch_dotted_path_is_known():
     text = BASE.replace("path: density", "path: pitch.semitones")
     assert "unknown-path" not in codes(text)
+
+# ---------------------------------------------------------------------------
+# expr annidati dentro let (granulation-studies #28 / gl-ls #7)
+
+
+def test_nested_expr_in_let_is_clean():
+    # l'esempio della issue: 'shape' riferisce il fratello 'env'
+    text = BASE.replace(
+        "base:\n",
+        'base:\n  volume:\n    expr: "shape - 21.2"\n    let:\n'
+        "      env: [[0, 1], [0.1583, 1.5]]\n"
+        '      shape: {expr: "min(env, 1.2)"}\n',
+    )
+    assert not any(d.code == "expr" for d in diags_of(text))
+
+
+def test_nested_expr_not_rechecked_standalone():
+    # il nodo annidato non va validato da solo: fuori dallo scope del
+    # contenitore 'env' sarebbe un nome ignoto (falso positivo)
+    text = BASE.replace(
+        "base:\n",
+        'base:\n  volume:\n    expr: "shape - 21.2"\n    let:\n'
+        "      env: [[0, 1], [0.1583, 1.5]]\n"
+        '      shape: {expr: "min(env, 1.2)"}\n',
+    )
+    assert diags_of(text) == []
+
+
+def test_nested_expr_cycle_flagged():
+    text = BASE.replace(
+        "base:\n",
+        'base:\n  volume:\n    expr: "a - 20"\n    let:\n'
+        '      a: {expr: "b"}\n'
+        '      b: {expr: "a"}\n',
+    )
+    ds = diags_of(text)
+    assert any(d.code == "expr" and "ciclo" in d.message for d in ds)
+
+
+def test_nested_expr_self_reference_from_shadowing_flagged():
+    # un nome ridefinito nel let interno non vede il nome che ombreggia
+    text = BASE.replace(
+        "base:\n",
+        'base:\n  volume:\n    expr: "v - 20"\n    let:\n'
+        "      a: 1\n"
+        '      v: {expr: "a", let: {a: {expr: "a + 1"}}}\n',
+    )
+    ds = diags_of(text)
+    assert any(d.code == "expr" and "ciclo" in d.message for d in ds)
+
+
+def test_nested_expr_syntactic_depth_flagged():
+    inner = '{expr: "1"}'
+    for _ in range(9):
+        inner = '{expr: "v", let: {v: %s}}' % inner
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  volume:\n    expr: \"v - 20\"\n    let:\n      v: %s\n" % inner,
+    )
+    ds = diags_of(text)
+    assert any(d.code == "expr" and "profondit" in d.message for d in ds)
+
+
+def test_nested_expr_error_carries_let_context():
+    text = BASE.replace(
+        "base:\n",
+        'base:\n  volume:\n    expr: "v - 20"\n    let:\n'
+        '      v: {expr: "boh"}\n',
+    )
+    ds = diags_of(text)
+    assert any(d.code == "expr" and "let.v" in d.message for d in ds)
+
+
+def test_generator_in_let_still_flagged():
+    text = BASE.replace(
+        "base:\n",
+        'base:\n  volume:\n    expr: "v - 20"\n    let:\n'
+        "      v: {ramp: {start: 0, step: 1}}\n",
+    )
+    ds = diags_of(text)
+    assert any(d.code == "expr" and "statiche" in d.message for d in ds)
+
+
+def test_variable_named_let_is_container_not_skip_marker():
+    # una variabile del let chiamata 'let': lo skip dei nodi annidati deve
+    # riconoscere 'let' come chiave-contenitore (genitore = nodo-expr), non
+    # come nome di variabile — il nodo annidato resta validato dal contenitore
+    text = BASE.replace(
+        "base:\n",
+        'base:\n  volume:\n    expr: "let - 20"\n    let:\n'
+        "      env: [[0, 1], [0.1583, 1.5]]\n"
+        '      let: {expr: "min(env, 1.2)"}\n',
+    )
+    assert not any(d.code == "expr" for d in diags_of(text))
+
+
+def test_spread_static_let_nested_expr_clean():
+    # nella strategy expr dello spread il nodo annidato convive con la
+    # banda-let e vede i nomi iniettati (i, n, pescaggi)
+    text = _spread(
+        "        base.onset:\n"
+        '          expr: "v * i + k"\n'
+        "          let:\n"
+        "            v: {base: 1, range: 2}\n"
+        '            k: {expr: "n * 2"}\n',
+        "      n: 3\n",
+    )
+    assert diags_of(text) == []
+
+
+def test_spread_static_let_nested_expr_error_on_expr():
+    text = _spread(
+        "        base.onset:\n"
+        '          expr: "k * i"\n'
+        "          let:\n"
+        '            k: {expr: "boh"}\n',
+        "      n: 3\n",
+    )
+    ds = diags_of(text)
+    assert any(d.code == "expr" and "let.k" in d.message for d in ds)
