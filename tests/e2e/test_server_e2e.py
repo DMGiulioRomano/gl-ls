@@ -25,7 +25,6 @@ base:
     envelope: hanning
 axes:
   density:
-    path: density
     baseline: 20
     base: 5
     range: 10
@@ -304,7 +303,6 @@ base:
   density: [[0, 5], [10, 40], [20, 5]]
 axes:
   density:
-    path: density
     baseline: 20
     values: [10, 30]
 """
@@ -340,7 +338,6 @@ base:
   volume: [[0, -60], [5, -6], [10, -60]]
 axes:
   density:
-    path: density
     baseline: 20
     values: [10]
 """
@@ -420,7 +417,6 @@ base:
   sample: corpus.wav
 axes:
   density:
-    path: density
     baseline: 20
     values: [10, 30]
 streams:
