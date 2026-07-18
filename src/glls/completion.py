@@ -145,7 +145,7 @@ def complete(
 
 def _complete_key(doc: yamlpos.Document, m: StudyModel,
                   path: Tuple[str, ...], line: int) -> List[types.CompletionItem]:
-    ctx = schema.context_for_path(path)
+    ctx = schema.context_for_path(path, frozenset(m.axes))
     items: List[types.CompletionItem] = []
     present = _existing_keys(doc.text, line, path)
 
@@ -175,11 +175,26 @@ def _complete_key(doc: yamlpos.Document, m: StudyModel,
                 sort="1",
             ))
     elif ctx == "axes":
+        # i path engine come chiavi d'asse dirette (anche dotted): senza
+        # 'path:' il path e' la chiave stessa (granstudies #32)
+        for dotted in EI.AXIS_PATHS:
+            if dotted in present:
+                continue
+            info = EI.PARAMS[dotted]
+            items.append(_item(
+                dotted,
+                f"Asse su `{dotted}` (path derivato dalla chiave). {info.doc} — "
+                f"bounds [{_b(info.min)}, {_b(info.max)}] {info.unit}",
+                types.CompletionItemKind.Class,
+                snippet=f"{dotted}:\n  ",
+                sort="2",
+            ))
         items.append(_item(
             "nuovo_asse",
-            "Snippet: nuovo asse con path e banda.",
+            "Snippet: nuovo asse con alias esplicito ('path:' diverso dalla "
+            "chiave) e banda.",
             types.CompletionItemKind.Class,
-            snippet="${1:density}:\n  path: ${2:density}\n  baseline: ${3:20}\n"
+            snippet="${1:alias}:\n  path: ${2:density}\n  baseline: ${3:20}\n"
                     "  n: ${4:40}\n  base: ${5:5}\n  range: ${6:10}",
             sort="3",
         ))
@@ -237,7 +252,7 @@ def _over_dotted_terminals(m: StudyModel):
 
 def _complete_value(doc: yamlpos.Document, m: StudyModel, path: Tuple[str, ...],
                     key: str, file_dir: Optional[str]) -> List[types.CompletionItem]:
-    ctx = schema.context_for_path(path)
+    ctx = schema.context_for_path(path, frozenset(m.axes))
     k = schema.key_in(ctx, key)
     items: List[types.CompletionItem] = []
     if k and k.values:

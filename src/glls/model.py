@@ -29,12 +29,13 @@ OVER_MARKERS = frozenset({
 @dataclass
 class AxisInfo:
     name: str
-    path: Optional[str]
+    path: Optional[str]                   # path engine risolto (esplicito o = nome)
     cfg: Dict[str, Any]
     doc_path: KeyPath                     # path nel documento
     generator: Optional[str] = None       # values | ramp | band | None
     n: Optional[int] = None               # conteggio posseduto dalla Y, se noto
     interpolation: str = "linear"
+    explicit_path: bool = False           # True se 'path:' e' dichiarato
 
     @property
     def defers_n(self) -> bool:
@@ -258,9 +259,13 @@ def build(doc: Document) -> StudyModel:
             if name in AXES_RESERVED or not isinstance(cfg, dict):
                 continue
             gen, n = y_generator_of(cfg)
+            # 'path' esplicito resta un alias; se omesso, la chiave dell'asse
+            # (anche in dot-notation, es. 'grain.duration') e' il path engine
+            explicit = isinstance(cfg.get("path"), str)
             m.axes[name] = AxisInfo(
                 name=name,
-                path=cfg.get("path") if isinstance(cfg.get("path"), str) else None,
+                path=cfg["path"] if explicit else (name if isinstance(name, str) else None),
+                explicit_path=explicit,
                 cfg=cfg,
                 doc_path=("axes", name),
                 generator=gen,

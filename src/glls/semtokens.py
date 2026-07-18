@@ -81,7 +81,7 @@ def tokens(doc: Document, m: StudyModel) -> List[int]:
             continue
         # chiavi
         if entry.key_span is not None and isinstance(path[-1], str):
-            ctx = schema.context_for_path(path[:-1])
+            ctx = schema.context_for_path(path[:-1], frozenset(m.axes))
             key = path[-1]
             ks = entry.key_span
             split = (split_over_key(key, doc.get(path)) if ctx == "over" else None)

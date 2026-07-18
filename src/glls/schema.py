@@ -290,7 +290,10 @@ _AXES_RESERVED = [
 
 _AXIS_KEYS = [
     _k("path", "**Path YAML nell'engine** da muovere (notazione punto): "
-               "`density`, `grain.duration`, `volume`, ...",
+               "`density`, `grain.duration`, `volume`, ... **Opzionale**: se "
+               "omesso, il path e' la chiave dell'asse stessa (anche dotted); "
+               "dichiararlo serve solo come alias (nome leggibile diverso "
+               "dal path reale).",
        values=EI.AXIS_PATHS),
     _k("baseline", "Valore a riposo dell'asse; obbligatorio se l'engine non ha "
                    "default per il path (density, pitch.*, loop_*)."),
@@ -474,27 +477,44 @@ def _env_context(rest: KeyPath) -> str:
     return "value"
 
 
-def _expand_dotted(rest: KeyPath) -> KeyPath:
+def _expand_dotted(rest: KeyPath, axis_names=frozenset()) -> KeyPath:
     """Espande i segmenti puntati di un path di override nella forma annidata.
 
     ``("axes.density.ramp", "step")`` -> ``("axes", "density", "ramp",
     "step")``: la notazione a chiave puntata che il runtime espande negli
     override di stream (granstudies ``study_spec._expand_dotted_keys``),
     cosi' il contesto e' quello della forma annidata equivalente.
+
+    Sotto ``axes.``/``stack.`` il primo identificatore e' un nome d'asse
+    (eventualmente dotted, es. ``grain.duration``): il suo confine e' risolto
+    da ``EI.split_axis_key`` (assi dichiarati > registro engine > primo
+    segmento) e il nome resta un unico elemento del path espanso.
     """
     if not any(isinstance(s, str) and "." in s for s in rest):
         return rest
     out: List[object] = []
     for seg in rest:
-        if isinstance(seg, str) and "." in seg:
-            out.extend(seg.split("."))
-        else:
+        if not isinstance(seg, str):
             out.append(seg)
+            continue
+        parts = seg.split(".")
+        if parts[0] in ("axes", "stack") and len(parts) > 1:
+            axis, tail, _ = EI.split_axis_key(".".join(parts[1:]), axis_names)
+            out.extend([parts[0], axis, *tail])
+        elif out and out[-1] in ("axes", "stack") and "." in seg:
+            axis, tail, _ = EI.split_axis_key(seg, axis_names)
+            out.extend([axis, *tail])
+        else:
+            out.extend(parts)
     return tuple(out)
 
 
-def context_for_path(path: KeyPath) -> str:
-    """Contesto schema di un key-path concreto del documento."""
+def context_for_path(path: KeyPath, axis_names=frozenset()) -> str:
+    """Contesto schema di un key-path concreto del documento.
+
+    ``axis_names``: nomi degli assi dichiarati nel documento base, usati per
+    il boundary-match dei nomi d'asse dotted nelle chiavi puntate di override.
+    """
     path = tuple(path)
     if not path:
         return "root"
@@ -509,7 +529,7 @@ def context_for_path(path: KeyPath) -> str:
         # il sottoalbero ``spread`` resta com'e' (viene consumato prima
         # dell'espansione runtime e le chiavi di ``over`` sono path interi)
         if sub[0] != "spread":
-            sub = _expand_dotted(sub)
+            sub = _expand_dotted(sub, axis_names)
         if sub[0] == "spread":
             if len(sub) == 1:
                 return "spread"
@@ -524,7 +544,7 @@ def context_for_path(path: KeyPath) -> str:
             if sub[1] == "n":
                 return "value"
             return "value"
-        return context_for_path(sub)
+        return context_for_path(sub, axis_names)
     if head == "base":
         return _engine_context(path[1:])
     if head == "axes":

@@ -9,7 +9,6 @@ base:
   sample: corpus.wav
 axes:
   density:
-    path: density
     baseline: 20
     values: [10, 30]
 """
@@ -44,9 +43,31 @@ def test_multiple_generators():
     assert "multi-generator" in codes(text)
 
 
-def test_axis_missing_path():
-    text = BASE.replace("    path: density\n", "")
-    assert "axis-no-path" in codes(text)
+def test_axis_key_dotted_is_engine_path():
+    # chiave dotted senza 'path': il path e' la chiave stessa, nessun errore
+    text = BASE.replace(
+        "  density:\n    baseline: 20\n    values: [10, 30]\n",
+        "  grain.duration:\n    values: [0.01, 0.05]\n")
+    assert diags_of(text) == []
+
+
+def test_axis_alias_without_path_warns_unknown():
+    # nome non-engine senza 'path': il path derivato non e' un parametro noto
+    text = BASE.replace("  density:", "  densty:")
+    assert "unknown-path" in codes(text)
+
+
+def test_axis_redundant_path_hint():
+    text = BASE.replace("    baseline: 20\n",
+                        "    path: density\n    baseline: 20\n")
+    assert "redundant-path" in codes(text)
+
+
+def test_axis_alias_with_explicit_path_no_hint():
+    text = BASE.replace("  density:", "  densita:").replace(
+        "    baseline: 20\n", "    path: density\n    baseline: 20\n")
+    cs = codes(text)
+    assert "redundant-path" not in cs and "unknown-path" not in cs
 
 
 def test_out_of_bounds_values():
@@ -408,7 +429,8 @@ def test_expr_outside_spread_not_marked_as_spread():
 
 
 def test_unknown_pitch_like_path_warns():
-    text = BASE.replace("path: density", "path: pitchfoo")
+    text = BASE.replace("    baseline: 20\n",
+                        "    path: pitchfoo\n    baseline: 20\n")
     assert "unknown-path" in codes(text)
 
 
@@ -622,7 +644,8 @@ def test_spread_n_expr_in_n_scope_is_unknown():
 
 
 def test_pitch_dotted_path_is_known():
-    text = BASE.replace("path: density", "path: pitch.semitones")
+    text = BASE.replace("    baseline: 20\n",
+                        "    path: pitch.semitones\n    baseline: 20\n")
     assert "unknown-path" not in codes(text)
 
 # ---------------------------------------------------------------------------
@@ -829,3 +852,82 @@ def test_dotted_key_inside_spread_block_still_flagged():
       over.axes.density: {values: [1, 2]}
 """
     assert "unknown-key" in codes(text)
+
+
+# ---------------------------------------------------------------------------
+# dot-notation delle chiavi asse (granulation-studies #32 / gl-ls #12)
+
+DOTTED = BASE.replace(
+    "    values: [10, 30]\n",
+    "    values: [10, 30]\n  grain.duration:\n    values: [0.01, 0.05]\n")
+
+
+def test_dotted_axis_in_orderings_and_stack():
+    text = DOTTED + (
+        "sweep:\n  orderings:\n    - [density, grain.duration]\n"
+        "stack:\n  grain.duration:\n    base: 5\n")
+    # la camminata enumera contro la Y a values: n-ownership atteso, ma
+    # niente unknown-axis sui nomi dotted
+    assert "unknown-axis" not in codes(text)
+
+
+def test_dotted_axis_bounds_from_key():
+    text = DOTTED.replace("values: [0.01, 0.05]", "values: [0.01, 30]")
+    assert "out-of-bounds" in codes(text)
+
+
+def test_override_full_dotted_crosses_declared_dotted_axis():
+    # forma tutta-puntata valida: boundary sul nome d'asse dichiarato
+    text = DOTTED + "streams:\n  s:\n    axes.grain.duration.values: [0.02]\n"
+    assert "unknown-key" not in codes(text)
+
+
+def test_override_full_dotted_introduces_engine_axis():
+    # asse dotted non dichiarato ma noto al registro engine: boundary valido
+    text = BASE + "streams:\n  s:\n    axes.grain.duration.values: [0.02]\n"
+    assert "unknown-key" not in codes(text)
+
+
+def test_override_ambiguous_axis_key():
+    both = DOTTED.replace(
+        "axes:\n",
+        "axes:\n  grain:\n    path: density\n    baseline: 20\n"
+        "    values: [10, 30]\n")
+    text = both + "streams:\n  s:\n    axes.grain.duration.values: [0.02]\n"
+    assert "ambiguous-axis" in codes(text)
+
+
+def test_override_direct_child_dotted_ambiguity():
+    both = DOTTED.replace(
+        "axes:\n",
+        "axes:\n  grain:\n    path: density\n    baseline: 20\n"
+        "    values: [10, 30]\n")
+    text = both + ("streams:\n  s:\n    axes:\n"
+                   "      grain.duration.values: [0.02]\n")
+    assert "ambiguous-axis" in codes(text)
+
+
+def test_over_path_resolves_dotted_axis():
+    text = DOTTED + """streams:
+  fan:
+    spread:
+      over:
+        axes.grain.duration.baseline:
+          values: [0.01, 0.02]
+"""
+    assert "unknown-axis" not in codes(text)
+
+
+def test_over_path_dotted_axis_ambiguous():
+    both = DOTTED.replace(
+        "axes:\n",
+        "axes:\n  grain:\n    path: density\n    baseline: 20\n"
+        "    values: [10, 30]\n")
+    text = both + """streams:
+  fan:
+    spread:
+      over:
+        axes.grain.duration.baseline:
+          values: [0.01, 0.02]
+"""
+    assert "ambiguous-axis" in codes(text)

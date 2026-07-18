@@ -104,7 +104,7 @@ def collect(doc: Document, m: StudyModel) -> List[types.Diagnostic]:
     _check_stack(bag, doc, m, ())
     _check_streams(bag, doc, m)
     _check_engine_block(bag, doc, m, ("base",))
-    _check_unknown_keys(bag, doc)
+    _check_unknown_keys(bag, doc, m)
     _check_expr_nodes(bag, doc, m)
     return bag.items
 
@@ -187,10 +187,18 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
                     code="axis-type")
             continue
         if "path" not in cfg:
-            bag.add(apath,
-                    f"Asse '{name}': manca 'path' (il parametro engine da muovere). "
-                    "Es. 'path: density' o 'path: grain.duration'.",
-                    code="axis-no-path")
+            # path derivato dalla chiave (issue granstudies #32): la chiave
+            # stessa, anche dotted, e' il path engine — va validata come tale
+            if (name not in EI.PARAMS
+                    and name != "pitch" and not name.startswith("pitch.")):
+                sug = _suggest(name, EI.AXIS_PATHS)
+                extra = (f" Forse intendevi '{sug}'?" if sug
+                         else " Dichiara 'path:' se il nome e' un alias.")
+                bag.add(apath,
+                        f"Asse '{name}': senza 'path' la chiave e' il path engine, "
+                        f"ma '{name}' non e' tra i parametri noti.{extra}",
+                        types.DiagnosticSeverity.Warning, code="unknown-path",
+                        data={"fix": {"kind": "rename", "new": sug}} if sug else None)
         else:
             p = cfg.get("path")
             if (isinstance(p, str) and p not in EI.PARAMS
@@ -202,6 +210,13 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
                         types.DiagnosticSeverity.Warning, code="unknown-path",
                         prefer_value=True,
                         data={"fix": {"kind": "rename-value", "new": sug}} if sug else None)
+            elif p == name:
+                bag.add(apath + ("path",),
+                        f"Asse '{name}': 'path' identico alla chiave e' ridondante "
+                        "(senza 'path' il path engine e' la chiave stessa).",
+                        types.DiagnosticSeverity.Hint, code="redundant-path",
+                        data={"fix": {"kind": "remove-key",
+                                      "path": list(apath + ("path",))}})
 
         interp_ax = cfg.get("interpolation")
         if interp_ax is not None and interp_ax not in EI.INTERPOLATIONS:
@@ -246,8 +261,9 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
                         require_stop=True)
 
         # bounds su baseline e values espliciti; i valori di un asse atterrano
-        # nel base root, quindi vale la sua duration_unit
-        engine_path = cfg.get("path")
+        # nel base root, quindi vale la sua duration_unit. Il path engine e'
+        # quello risolto: 'path' esplicito o, se assente, la chiave dell'asse
+        engine_path = cfg.get("path", name)
         if isinstance(engine_path, str):
             in_samples = _samples_unit(doc, ("base",))
             if "baseline" in cfg:
@@ -786,12 +802,31 @@ def _check_over_path(bag: Bag, m: StudyModel, opath: KeyPath, dotted: str) -> No
                 types.DiagnosticSeverity.Warning, code="over-path")
         return
     if head in ("axes", "stack") and len(parts) >= 2 and m.axes:
-        if parts[1] not in m.axes:
-            sug = _suggest(parts[1], list(m.axes))
+        axis, _, amb = EI.split_axis_key(".".join(parts[1:]), frozenset(m.axes))
+        if amb is not None:
+            _report_ambiguous_axis(bag, opath, dotted, amb)
+            return
+        # un asse dotted non dichiarato ma noto al registro engine e' legale
+        # (un override puo' introdurlo): niente diagnostica
+        if axis not in m.axes and axis not in EI.known_paths():
+            sug = _suggest(axis, list(m.axes))
             extra = f" Forse '{sug}'?" if sug else ""
             bag.add(opath,
-                    f"spread.over: asse sconosciuto '{parts[1]}' in '{dotted}'.{extra}",
+                    f"spread.over: asse sconosciuto '{axis}' in '{dotted}'.{extra}",
                     code="unknown-axis")
+
+
+def _report_ambiguous_axis(bag: Bag, kp: KeyPath, dotted: str,
+                           amb: Sequence[str]) -> None:
+    """Due assi dichiarati con prefisso comune attraversati dalla stessa chiave
+    puntata: indecidibile, come il ``SpecError`` di granstudies
+    ``split_axis_key`` — l'hint e' la forma annidata, sempre valida."""
+    names = " o ".join(repr(n) for n in amb)
+    bag.add(kp,
+            f"Chiave puntata '{dotted}' ambigua: il nome d'asse puo' essere "
+            f"{names}. Usa la forma annidata (axes: {{<nome.asse>: {{...}}}}) "
+            "per sciogliere l'ambiguita'.",
+            code="ambiguous-axis")
 
 
 # ---------------------------------------------------------------------------
@@ -935,14 +970,24 @@ def _dotted_override_zone(path: KeyPath) -> bool:
             and (len(path) < 3 or path[2] != "spread"))
 
 
-def _check_dotted_key(bag: Bag, base: KeyPath, key: str) -> None:
+def _check_dotted_key(bag: Bag, m: StudyModel, base: KeyPath, key: str) -> None:
     """Valida una chiave puntata di override segmento per segmento, ognuno
     nel contesto della forma annidata equivalente (``axes.density.ramp.step``:
     ``axes`` in stream_override, ``density`` nome libero, ``ramp`` in axis,
-    ``step`` in ramp)."""
-    parts = key.split(".")
+    ``step`` in ramp). Sotto ``axes.``/``stack.`` il primo identificatore e'
+    un nome d'asse eventualmente dotted: il confine e' risolto col
+    boundary-match (assi dichiarati > registro engine > primo segmento) e il
+    nome resta un segmento unico."""
+    axis_names = frozenset(m.axes)
+    parts: List[str] = key.split(".")
+    if parts[0] in ("axes", "stack") and len(parts) > 1:
+        axis, tail, amb = EI.split_axis_key(".".join(parts[1:]), axis_names)
+        if amb is not None:
+            _report_ambiguous_axis(bag, base + (key,), key, amb)
+            return
+        parts = [parts[0], axis, *tail]
     for i, seg in enumerate(parts):
-        ctx = schema.context_for_path(base + tuple(parts[:i]))
+        ctx = schema.context_for_path(base + tuple(parts[:i]), axis_names)
         if ctx not in schema.CLOSED_CONTEXTS:
             continue  # contesto a nomi liberi (axes, stack, ...)
         allowed = [k.name for k in schema.keys_for(ctx)]
@@ -959,15 +1004,25 @@ def _check_dotted_key(bag: Bag, base: KeyPath, key: str) -> None:
         return
 
 
-def _check_unknown_keys(bag: Bag, doc: Document) -> None:
+def _check_unknown_keys(bag: Bag, doc: Document, m: StudyModel) -> None:
+    axis_names = frozenset(m.axes)
     for entry in list(doc.iter_entries()):
         if entry.kind != "mapping":
             continue
-        ctx = schema.context_for_path(entry.path)
-        if ctx not in schema.CLOSED_CONTEXTS:
-            continue
+        ctx = schema.context_for_path(entry.path, axis_names)
         value = doc.get(entry.path)
         if not isinstance(value, dict):
+            continue
+        # figli diretti di axes:/stack: negli override: nomi d'asse letterali,
+        # ma una chiave puntata (es. 'density.baseline') segue il boundary del
+        # nome d'asse — qui si intercetta solo l'ambiguita'
+        if ctx in ("axes", "stack") and _dotted_override_zone(entry.path):
+            for key in value:
+                if isinstance(key, str) and "." in key and all(key.split(".")):
+                    _, _, amb = EI.split_axis_key(key, axis_names)
+                    if amb is not None:
+                        _report_ambiguous_axis(bag, entry.path + (key,), key, amb)
+        if ctx not in schema.CLOSED_CONTEXTS:
             continue
         allowed = [k.name for k in schema.keys_for(ctx)]
         for key in value:
@@ -977,7 +1032,7 @@ def _check_unknown_keys(bag: Bag, doc: Document) -> None:
             if ctx == "walk" or (ctx == "axis" and key in ("rand", "cps")):
                 continue  # errori dedicati altrove
             if "." in key and _dotted_override_zone(entry.path) and all(key.split(".")):
-                _check_dotted_key(bag, entry.path, key)
+                _check_dotted_key(bag, m, entry.path, key)
                 continue
             sug = _suggest(key, allowed)
             extra = f" Forse intendevi '{sug}'?" if sug else ""

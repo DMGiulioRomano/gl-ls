@@ -39,3 +39,24 @@ def test_over_dotted_keys_are_not_expanded():
 def test_dotted_outside_streams_untouched():
     # fuori dagli override il runtime non espande: contesto invariato (root)
     assert schema.context_for_path(("base.grain.duration",)) == "root"
+
+
+def test_dotted_axis_boundary_from_engine_registry():
+    # 'grain.duration' e' un path engine noto: il nome d'asse resta intero
+    assert schema.context_for_path(
+        ("streams", "s", "axes.grain.duration.ramp")) == "ramp"
+    assert schema.context_for_path(
+        ("streams", "s", "axes.grain.duration.ramp", "step")) == "env"
+
+
+def test_dotted_axis_boundary_from_declared_axes():
+    # un asse dichiarato (anche non-engine) ha precedenza sul registro
+    assert schema.context_for_path(
+        ("streams", "s", "axes.mio.asse.ramp"),
+        axis_names=frozenset({"mio.asse"})) == "ramp"
+
+
+def test_dotted_child_of_axes_uses_boundary():
+    # figlio diretto puntato di axes: negli override: asse + resto annidato
+    assert schema.context_for_path(
+        ("streams", "s", "axes", "grain.duration.ramp")) == "ramp"

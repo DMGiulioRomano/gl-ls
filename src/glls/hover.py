@@ -40,7 +40,8 @@ def _axis_summary(m: StudyModel, name: str) -> str:
     ax = m.axes.get(name)
     if ax is None:
         return ""
-    parts: List[str] = [f"**Asse `{name}`** → `{ax.path or '?'}`"]
+    origin = "" if ax.explicit_path else " *(path derivato dalla chiave)*"
+    parts: List[str] = [f"**Asse `{name}`** → `{ax.path or '?'}`{origin}"]
     gen = {"values": "lista esplicita", "ramp": "rampa",
            "band": "banda [base, base+range]"}.get(ax.generator or "", "nessun generatore")
     n = f"n={ax.n}" if ax.n else ("n dalla camminata-X" if ax.defers_n else "n=?")
@@ -89,7 +90,7 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
                rng: Optional[types.Range]) -> Optional[types.Hover]:
     name = path[-1]
     parent = path[:-1]
-    ctx = schema.context_for_path(parent)
+    ctx = schema.context_for_path(parent, frozenset(m.axes))
 
     # nomi dinamici: assi e stream
     if ctx == "axes" and name not in AXES_RESERVED:

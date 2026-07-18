@@ -158,3 +158,36 @@ def density_zone(v: float) -> str:
 
 # path proponibili per axes.<asse>.path e spread.over
 AXIS_PATHS = sorted(PARAMS.keys())
+
+
+def known_paths() -> frozenset:
+    """Tutti i path engine dotted noti (granstudies ``bounds.known_paths``)."""
+    return frozenset(PARAMS)
+
+
+def split_axis_key(
+    dotted: str, axis_names=frozenset()
+) -> Tuple[str, Tuple[str, ...], Optional[Tuple[str, ...]]]:
+    """(asse, resto, ambigui) — confine del nome d'asse in una chiave dotted.
+
+    Rispecchia granstudies ``spread.split_axis_key``: sotto ``axes.``/``stack.``
+    il primo identificatore e' un nome d'asse il cui confine si risolve con
+    precedenza (1) assi dichiarati nel documento base, (2) registro parametri
+    engine (un override puo' introdurre un asse dotted non dichiarato),
+    (3) fallback sintattico al primo segmento (chiavi riservate, alias senza
+    punto). Piu' match nello stesso livello — es. assi ``grain`` e
+    ``grain.duration`` entrambi dichiarati — sono indecidibili: il terzo
+    elemento porta i nomi in conflitto (altrimenti ``None``).
+    """
+    segs = dotted.split(".")
+    spans = range(1, len(segs) + 1)
+    for names in (frozenset(axis_names), known_paths()):
+        candidates = [j for j in spans if ".".join(segs[:j]) in names]
+        if len(candidates) > 1:
+            ambiguous = tuple(".".join(segs[:j]) for j in candidates)
+            j = candidates[-1]
+            return ".".join(segs[:j]), tuple(segs[j:]), ambiguous
+        if candidates:
+            j = candidates[0]
+            return ".".join(segs[:j]), tuple(segs[j:]), None
+    return segs[0], tuple(segs[1:]), None
