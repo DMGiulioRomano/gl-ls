@@ -965,6 +965,12 @@ def _check_expr_nodes(bag: Bag, doc: Document, m: StudyModel) -> None:
         p = entry.path
         if len(p) >= 3 and p[0] == "streams" and p[2] == "spread":
             continue
+        # un nodo-expr annidato dentro il 'let' di un altro nodo-expr non e'
+        # standalone: lo valida (parse ricorsivo) e lo risolve (lazy, con i
+        # fratelli in scope) il nodo contenitore — qui darebbe falsi 'nome
+        # ignoto' sui riferimenti ai fratelli.
+        if "let" in p:
+            continue
         value = doc.get(p)
         if not exprlang.is_expr_node(value):
             continue
