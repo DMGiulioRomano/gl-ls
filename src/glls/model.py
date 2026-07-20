@@ -142,6 +142,37 @@ class OverEntry:
     doc_keys: List[str] = field(default_factory=list)
     marker_keys: Dict[str, str] = field(default_factory=dict)
     whole_key: Optional[str] = None
+    # chiave documento -> key-path sotto ``spread`` (("over", chiave) per la
+    # forma annidata, (chiave,) per una dotted ``over.<path>`` al primo livello)
+    doc_key_paths: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+
+
+def split_spread_over_key(key: Any) -> Optional[str]:
+    """Il resto dopo ``over.`` se ``key`` e' una chiave puntata al primo
+    livello di ``spread:`` (granstudies ``_expand_spread_dotted``): la chiave
+    literal ``over`` e ogni altra chiave restano None."""
+    if isinstance(key, str) and key.startswith("over.") and len(key) > len("over."):
+        return key[len("over."):]
+    return None
+
+
+def over_items(spread: Dict[str, Any]) -> List[Tuple[str, Any, Tuple[str, ...]]]:
+    """Le entry di ``over`` effettive di un blocco spread, in ordine di
+    documento: ``(chiave-over, valore, key-path documento sotto spread)``.
+
+    Copre sia la forma annidata ``over: {...}`` sia le chiavi puntate
+    ``over.<path>`` al primo livello di ``spread:`` — le due forme sono
+    equivalenti e si fondono nello stesso dict (``_expand_spread_dotted``).
+    """
+    items: List[Tuple[str, Any, Tuple[str, ...]]] = []
+    for key, value in spread.items():
+        rest = split_spread_over_key(key)
+        if rest is not None:
+            items.append((rest, value, (key,)))
+        elif key == "over" and isinstance(value, dict):
+            for ok, ov in value.items():
+                items.append((str(ok), ov, ("over", str(ok))))
+    return items
 
 
 def _merge_strategy(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -163,8 +194,19 @@ def expand_over(over: Dict[str, Any]) -> Dict[str, OverEntry]:
     tre righe ``.base``/``.range``/``.seed``) si fondono in un'unica strategy,
     nell'ordine di dichiarazione (l'ultimo vince sui conflitti di foglia).
     """
+    return expand_over_items(
+        [(str(k), v, ("over", str(k))) for k, v in over.items()])
+
+
+def expand_over_items(
+    items: List[Tuple[str, Any, Tuple[str, ...]]]
+) -> Dict[str, OverEntry]:
+    """Come ``expand_over``, su entry gia' raccolte da ``over_items`` — cosi'
+    i frammenti dotted ``over.<path>`` al primo livello di ``spread:`` si
+    fondono con la forma annidata, e ogni frammento conserva il key-path
+    documento per ancorare le diagnostiche."""
     out: Dict[str, OverEntry] = {}
-    for key, value in over.items():
+    for key, value, doc_kp in items:
         split = split_over_key(key, value)
         if split is not None:
             path, marker = split
@@ -173,11 +215,13 @@ def expand_over(over: Dict[str, Any]) -> Dict[str, OverEntry]:
             path, marker = str(key), None
             contribution = value
         e = out.setdefault(path, OverEntry(path=path))
-        e.doc_keys.append(str(key))
+        doc_key = doc_kp[-1]
+        e.doc_keys.append(doc_key)
+        e.doc_key_paths[doc_key] = doc_kp
         if marker is not None:
-            e.marker_keys[marker] = str(key)
+            e.marker_keys[marker] = doc_key
         else:
-            e.whole_key = str(key)
+            e.whole_key = doc_key
         if isinstance(contribution, dict):
             merged = e.strategy if isinstance(e.strategy, dict) else {}
             e.strategy = _merge_strategy(merged, contribution)
@@ -313,14 +357,12 @@ def build(doc: Document) -> StudyModel:
                 elif _is_expr_node(decl):
                     n = _eval_spread_n(decl)
                 if n is None:
-                    over = spread.get("over")
-                    if isinstance(over, dict):
-                        for oe in expand_over(over).values():
-                            if isinstance(oe.strategy, dict):
-                                _, owned = y_generator_of(oe.strategy)
-                                if owned:
-                                    n = owned
-                                    break
+                    for oe in expand_over_items(over_items(spread)).values():
+                        if isinstance(oe.strategy, dict):
+                            _, owned = y_generator_of(oe.strategy)
+                            if owned:
+                                n = owned
+                                break
             m.streams[name] = StreamInfo(
                 name=name, cfg=cfg, doc_path=("streams", name),
                 is_spread=is_spread, spread_n=n,
