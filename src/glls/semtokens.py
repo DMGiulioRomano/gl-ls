@@ -13,7 +13,8 @@ from typing import List, Optional, Tuple
 
 from . import engine_info as EI
 from . import schema
-from .model import AXES_RESERVED, STACK_RESERVED, StudyModel, split_over_key
+from .model import (AXES_RESERVED, STACK_RESERVED, StudyModel, split_over_key,
+                    split_spread_over_key)
 from .yamlpos import Document
 
 TOKEN_TYPES = [
@@ -84,13 +85,27 @@ def tokens(doc: Document, m: StudyModel) -> List[int]:
             ctx = schema.context_for_path(path[:-1], frozenset(m.axes))
             key = path[-1]
             ks = entry.key_span
-            split = (split_over_key(key, doc.get(path)) if ctx == "over" else None)
-            if split is not None and ks.start_line == ks.end_line:
+            # dotted ``over.<path>`` al primo livello di spread: 'over' come
+            # keyword, il resto come una chiave del contesto over
+            offset, okey = 0, key
+            if ctx == "spread":
+                rest = split_spread_over_key(key)
+                if rest is not None and ks.start_line == ks.end_line:
+                    raw.append((ks.start_line, ks.start_col, len("over"),
+                                _T["keyword"]))
+                    offset, okey = len("over."), rest
+            split = (split_over_key(okey, doc.get(path))
+                     if ctx == "over" or offset else None)
+            if offset and split is None and ks.start_line == ks.end_line:
+                raw.append((ks.start_line, ks.start_col + offset, len(okey),
+                            _T["property"]))
+            elif split is not None and ks.start_line == ks.end_line:
                 # chiave puntata splittata: path come property, marcatore come
                 # macro (il '.' di separazione resta senza token)
                 head, marker = split
-                raw.append((ks.start_line, ks.start_col, len(head), _T["property"]))
-                raw.append((ks.start_line, ks.start_col + len(head) + 1,
+                raw.append((ks.start_line, ks.start_col + offset, len(head),
+                            _T["property"]))
+                raw.append((ks.start_line, ks.start_col + offset + len(head) + 1,
                             len(marker), _T["macro"]))
             else:
                 tok = _classify_key(path, ctx, key)

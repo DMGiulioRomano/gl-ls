@@ -354,7 +354,8 @@ _SPREAD_KEYS = [
             "(values/ramp piena/banda con n) deve **coincidere**; se omesso lo "
             "definisce l'unico conteggio posseduto."),
     _k("over", "`{path puntato: strategy}` — i valori si appaiano **per "
-               "indice** tra i path (niente prodotto cartesiano)."),
+               "indice** tra i path (niente prodotto cartesiano). Ammessa "
+               "anche la forma dotted `over.<path>: ...` al primo livello."),
     _k("sweep", "Blocco sweep esplicito: **riattiva** lo sweep dei generati "
                 "(di default spread lo spegne: ascolto verticale)."),
 ]
@@ -539,6 +540,12 @@ def context_for_path(path: KeyPath, axis_names=frozenset()) -> str:
                 if len(sub) == 3:
                     return "spread_strategy"
                 return _env_context(sub[3:])
+            if isinstance(sub[1], str) and sub[1].startswith("over."):
+                # dotted ``over.<path>`` al primo livello di spread: la chiave
+                # collassa ``over`` + path, i figli sono la strategy
+                if len(sub) == 2:
+                    return "spread_strategy"
+                return _env_context(sub[2:])
             if sub[1] == "sweep":
                 return "sweep" if len(sub) == 2 else "value"
             if sub[1] == "n":

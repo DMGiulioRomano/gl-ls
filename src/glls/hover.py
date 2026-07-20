@@ -14,7 +14,8 @@ from lsprotocol import types
 from . import engine_info as EI
 from . import schema
 from .convert import as_num as _num, fmt_num
-from .model import AXES_RESERVED, STACK_RESERVED, StudyModel, split_over_key
+from .model import (AXES_RESERVED, STACK_RESERVED, StudyModel, split_over_key,
+                    split_spread_over_key)
 from .yamlpos import Document, KeyPath
 
 
@@ -86,6 +87,31 @@ def hover(doc: Document, m: StudyModel, line: int, character: int) -> Optional[t
     return _hover_value(doc, m, path, rng)
 
 
+def _hover_over_key(doc: Document, path: KeyPath, dotted: str,
+                    rng: Optional[types.Range],
+                    intro: str = "") -> Optional[types.Hover]:
+    """Hover di una entry di ``over``: chiave del contesto annidato oppure
+    resto di una dotted ``over.<path>`` al primo livello di ``spread:``."""
+    split = split_over_key(dotted, doc.get(path))
+    if split is not None:
+        head, marker = split
+        mk = schema.key_in("spread_strategy", marker)
+        text = (f"{intro}path `{head}` + strategy `{marker}` "
+                f"(equivale a `{head}:` con `{marker}:` annidato).")
+        if not intro:
+            text = "Chiave puntata: " + text
+        if mk is not None:
+            text += f"\n\n**`{marker}`** — {mk.doc}"
+        info = EI.PARAMS.get(head[5:]) if head.startswith("base.") else None
+        return _md(text + (_bounds_line(head[5:]) if info else ""), rng)
+    info = EI.PARAMS.get(dotted[5:]) if dotted.startswith("base.") else None
+    base = (f"{intro}i valori della strategy finiscono in `{dotted}` di ogni "
+            "stream generato." if intro else
+            f"Path puntato nel documento: i valori della strategy finiscono "
+            f"in `{dotted}` di ogni stream generato.")
+    return _md(base + (_bounds_line(dotted[5:]) if info else ""), rng)
+
+
 def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
                rng: Optional[types.Range]) -> Optional[types.Hover]:
     name = path[-1]
@@ -112,21 +138,13 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
                        "(sweep spento salvo blocco `sweep:` esplicito).", rng)
         return _md(f"Stream `{name}`: override parziale del documento "
                    "(deep-merge; le liste rimpiazzano).", rng)
+    if ctx == "spread":
+        rest = split_spread_over_key(name)
+        if rest is not None:
+            return _hover_over_key(doc, path, rest, rng,
+                                   intro="Forma dotted di `over`: ")
     if ctx == "over":
-        dotted = str(name)
-        split = split_over_key(dotted, doc.get(path))
-        if split is not None:
-            head, marker = split
-            mk = schema.key_in("spread_strategy", marker)
-            text = (f"Chiave puntata: path `{head}` + strategy `{marker}` "
-                    f"(equivale a `{head}:` con `{marker}:` annidato).")
-            if mk is not None:
-                text += f"\n\n**`{marker}`** — {mk.doc}"
-            info = EI.PARAMS.get(head[5:]) if head.startswith("base.") else None
-            return _md(text + (_bounds_line(head[5:]) if info else ""), rng)
-        info = EI.PARAMS.get(dotted[5:]) if dotted.startswith("base.") else None
-        base = f"Path puntato nel documento: i valori della strategy finiscono in `{dotted}` di ogni stream generato."
-        return _md(base + (_bounds_line(dotted[5:]) if info else ""), rng)
+        return _hover_over_key(doc, path, str(name), rng)
 
     k = schema.key_in(ctx, str(name))
     if k is None:

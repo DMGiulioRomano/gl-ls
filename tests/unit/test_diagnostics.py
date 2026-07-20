@@ -907,13 +907,26 @@ def test_dotted_key_at_document_root_still_flagged():
     assert "unknown-key" in codes(text)
 
 
-def test_dotted_key_inside_spread_block_still_flagged():
-    # dentro spread niente espansione (il blocco e' consumato prima); le
-    # chiavi puntate di over sono gia' gestite dal contesto aperto 'over'
+def test_dotted_over_key_inside_spread_block_valid():
+    # granstudies ``_expand_spread_dotted`` (issue #15): la dotted ``over.<path>``
+    # al primo livello di spread equivale alla forma annidata ``over: {...}``
     text = BASE + """streams:
   v1:
     spread:
       n: 2
+      over.axes.density: {values: [1, 2]}
+"""
+    assert "unknown-key" not in codes(text)
+
+
+def test_other_dotted_key_inside_spread_block_still_flagged():
+    # l'espansione dotted dentro spread vale solo per ``over.``: il resto del
+    # blocco e' consumato prima dell'espansione runtime e resta letterale
+    text = BASE + """streams:
+  v1:
+    spread:
+      n: 2
+      sweep.orders: [1]
       over.axes.density: {values: [1, 2]}
 """
     assert "unknown-key" in codes(text)

@@ -22,8 +22,10 @@ from .model import (
     GEN_MARKERS,
     STACK_RESERVED,
     StudyModel,
-    expand_over,
+    expand_over_items,
+    over_items,
     ramp_count,
+    split_spread_over_key,
 )
 from .yamlpos import Document, KeyPath, Span
 
@@ -615,7 +617,7 @@ def _over_entry_kp(spath: KeyPath, oe) -> KeyPath:
     """Key-path documento rappresentativo di una entry-over (per span a livello
     di path): la chiave annidata se c'e', altrimenti la prima chiave puntata."""
     key = oe.whole_key if oe.whole_key is not None else oe.doc_keys[0]
-    return spath + ("over", key)
+    return spath + oe.doc_key_paths[key]
 
 
 def _over_marker_kp(spath: KeyPath, oe, marker: str) -> KeyPath:
@@ -623,8 +625,10 @@ def _over_marker_kp(spath: KeyPath, oe, marker: str) -> KeyPath:
     puntata del frammento se il marcatore arriva da li', altrimenti il campo
     annidato sotto la chiave-path."""
     if marker in oe.marker_keys:
-        return spath + ("over", oe.marker_keys[marker])
-    return spath + ("over", oe.whole_key, marker)
+        return spath + oe.doc_key_paths[oe.marker_keys[marker]]
+    if oe.whole_key is not None:
+        return spath + oe.doc_key_paths[oe.whole_key] + (marker,)
+    return _over_entry_kp(spath, oe)
 
 
 def _check_spread(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
@@ -633,13 +637,15 @@ def _check_spread(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
         bag.add(spath, "'spread' e' un dict {n?, over, sweep?}.", code="spread-type")
         return
     n_decl = _check_spread_n(bag, spath, spread.get("n"))
-    over = spread.get("over")
-    if not isinstance(over, dict) or not over:
+    # forma annidata ``over: {...}`` + chiavi dotted ``over.<path>`` al primo
+    # livello (granstudies ``_expand_spread_dotted``): stesse entry, fuse
+    items = over_items(spread)
+    if not items:
         bag.add(spath, f"Entry-spread '{entry}': manca 'over' "
                 "({path puntato: strategy}).", code="spread-no-over")
         return
 
-    entries = expand_over(over)
+    entries = expand_over_items(items)
     owned: List[Tuple[str, int]] = []
     expr_entries: List[Any] = []
     for oe in entries.values():
@@ -1065,6 +1071,8 @@ def _check_unknown_keys(bag: Bag, doc: Document, m: StudyModel) -> None:
             # i contesti env/axis condividono il vocabolario banda: gia' coperti
             if ctx == "walk" or (ctx == "axis" and key in ("rand", "cps")):
                 continue  # errori dedicati altrove
+            if ctx == "spread" and split_spread_over_key(key) is not None:
+                continue  # dotted over.<path>: path e strategy in _check_spread
             if "." in key and _dotted_override_zone(entry.path) and all(key.split(".")):
                 _check_dotted_key(bag, m, entry.path, key)
                 continue

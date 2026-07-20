@@ -210,6 +210,15 @@ def _complete_key(doc: yamlpos.Document, m: StudyModel,
             if label not in present:
                 items.append(_item(label, doc_md, types.CompletionItemKind.Reference,
                                    snippet=snip, sort="3"))
+    elif ctx == "spread":
+        # forma dotted di ``over``: ``over.<path>`` al primo livello, dopo le
+        # chiavi letterali (equivale a ``over:`` annidato)
+        for label, snip, doc_md in _over_dotted_terminals(m):
+            dotted = "over." + label
+            if dotted not in present:
+                items.append(_item(dotted, doc_md + " (Forma dotted di `over`.)",
+                                   types.CompletionItemKind.Reference,
+                                   snippet="over." + snip, sort="4"))
     elif ctx == "streams":
         items.append(_item(
             "ventaglio",
