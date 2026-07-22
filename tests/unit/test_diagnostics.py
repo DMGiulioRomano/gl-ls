@@ -1062,3 +1062,53 @@ def test_versions_generator_variables_not_flagged():
     # generatore Y e non va segnalata come chiave sconosciuta
     text = VERSIONS + "  onset: 0\n  duration: 6\n  chunk: 4\n"
     assert codes(text) == set()
+
+
+# ---------------------------------------------------------------------------
+# spread globale (issue #34): chiave root, non blocco libero
+
+
+def test_global_spread_block_no_unknown_key():
+    text = BASE + """spread:
+  over:
+    base.pointer.start:
+      values: [0.1, 0.2, 0.3]
+streams:
+  v1:
+    spread:
+      over:
+        base.pan:
+          expr: "i * 27"
+"""
+    cs = codes(text)
+    assert "unknown-key" not in cs
+    assert "expr" not in cs
+
+
+def test_global_spread_alone_partial_no_n_required():
+    # da solo (senza entry che lo eredita) puo' essere parziale: nessun
+    # errore "nessuna fonte per n" sul blocco globale
+    text = BASE + """spread:
+  over:
+    base.volume:
+      base: -12
+      range: 6
+"""
+    assert "spread-no-n" not in codes(text)
+
+
+def test_stream_spread_inherits_n_from_global():
+    # cugini non possiede n in proprio: lo eredita dal blocco globale via
+    # deep-merge (stessa semantica di sweep:)
+    text = BASE + """spread:
+  over:
+    base.pointer.start:
+      values: [0.1, 0.2, 0.3]
+streams:
+  cugini:
+    spread:
+      over:
+        base.pan:
+          expr: "i * 27"
+"""
+    assert "spread-no-n" not in codes(text)

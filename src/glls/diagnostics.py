@@ -107,6 +107,7 @@ def collect(doc: Document, m: StudyModel) -> List[types.Diagnostic]:
     _check_stack(bag, doc, m, ())
     _check_versions(bag, doc, m)
     _check_streams(bag, doc, m)
+    _check_global_spread(bag, doc, m)
     _check_engine_block(bag, doc, m, ("base",))
     _check_unknown_keys(bag, doc, m)
     _check_expr_nodes(bag, doc, m)
@@ -634,9 +635,10 @@ def _check_streams(bag: Bag, doc: Document, m: StudyModel) -> None:
         _check_sweep(bag, doc, m, spath + ("sweep",))
         if isinstance(cfg.get("base"), dict):
             _check_engine_block(bag, doc, m, spath + ("base",))
-        spread = cfg.get("spread")
-        if spread is not None:
-            _check_spread(bag, doc, m, spath + ("spread",), spread, name)
+        if "spread" in cfg:
+            spread = _merged_spread(doc.get(("spread",)), cfg.get("spread"))
+            if spread is not None:
+                _check_spread(bag, doc, m, spath + ("spread",), spread, name)
 
 
 def _over_entry_kp(spath: KeyPath, oe) -> KeyPath:
@@ -657,8 +659,41 @@ def _over_marker_kp(spath: KeyPath, oe, marker: str) -> KeyPath:
     return _over_entry_kp(spath, oe)
 
 
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """Stessa semantica del deep-merge runtime (``granstudies.spread._deep_merge``):
+    dict ricorsivo, tutto il resto (liste incluse) rimpiazza."""
+    result = dict(base)
+    for k, v in override.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
+def _merged_spread(global_spread: Any, local_spread: Any) -> Any:
+    """Spread effettivo di una entry ``streams.<name>.spread`` dopo il merge
+    col blocco globale (issue #34): il locale eredita il globale come default,
+    via deep-merge. Senza globale valido il locale passa invariato."""
+    local = local_spread if local_spread is not None else {}
+    if not isinstance(global_spread, dict) or not isinstance(local, dict):
+        return local_spread
+    return _deep_merge(global_spread, local)
+
+
+def _check_global_spread(bag: Bag, doc: Document, m: StudyModel) -> None:
+    """Blocco ``spread:`` top-level (issue #34): default che le entry di
+    ``streams:`` con la chiave ``spread`` ereditano via deep-merge. Da solo
+    puo' essere parziale (es. solo un path in `over`, senza n proprio): la
+    validazione del conteggio resta alle entry, dove avviene il merge —
+    qui si controllano solo path/strategy/expr, come per uno spread normale."""
+    spread = doc.get(("spread",))
+    if spread is not None:
+        _check_spread(bag, doc, m, ("spread",), spread, "(globale)", require_n=False)
+
+
 def _check_spread(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
-                  spread: Any, entry: str) -> None:
+                  spread: Any, entry: str, require_n: bool = True) -> None:
     if not isinstance(spread, dict):
         bag.add(spath, "'spread' e' un dict {n?, over, sweep?}.", code="spread-type")
         return
@@ -734,7 +769,7 @@ def _check_spread(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
                 f"Entry-spread '{entry}': conteggi discordanti ({det}) — "
                 "spread.n e i conteggi posseduti devono coincidere.",
                 code="spread-count")
-    elif not counts:
+    elif not counts and require_n:
         bag.add(spath,
                 f"Entry-spread '{entry}': nessuna fonte per n — dichiara "
                 "'n:' oppure una strategy che possiede il conteggio "
@@ -1123,6 +1158,8 @@ def _check_expr_nodes(bag: Bag, doc: Document, m: StudyModel) -> None:
         # le bande-let e lo scope i/n: qui si saltano per non duplicarli.
         p = entry.path
         if len(p) >= 3 and p[0] == "streams" and p[2] == "spread":
+            continue
+        if p and p[0] == "spread":
             continue
         # un nodo-expr annidato dentro il 'let' di un altro nodo-expr non e'
         # standalone: lo valida (parse ricorsivo) e lo risolve (lazy, con i

@@ -283,6 +283,10 @@ _ROOT_KEYS = [
                    "prodotto cartesiano delle variabili fa i file. Chiavi "
                    "riservate `onset`/`duration` e `chunk` (raggruppamento "
                    "diagonale) non sono variabili del prodotto.", kind="keyword"),
+    _k("spread", "**Spread globale**: default che ogni entry di `streams:` con "
+                 "la chiave `spread` eredita via deep-merge (come `sweep:`). "
+                 "Puo' essere parziale (es. solo `n`); da solo non espande "
+                 "nulla, serve una entry con `spread:` a valle.", kind="keyword"),
 ]
 
 _AXES_RESERVED = [
@@ -530,6 +534,31 @@ def _expand_dotted(rest: KeyPath, axis_names=frozenset()) -> KeyPath:
     return tuple(out)
 
 
+def _spread_context(rest: KeyPath) -> str:
+    """Contesto dentro un blocco ``spread`` (globale o di entry-stream):
+    ``rest`` e' il path dopo la chiave ``spread`` stessa."""
+    if not rest:
+        return "spread"
+    head = rest[0]
+    if head == "over":
+        if len(rest) == 1:
+            return "over"
+        if len(rest) == 2:
+            return "spread_strategy"
+        return _env_context(rest[2:])
+    if isinstance(head, str) and head.startswith("over."):
+        # dotted ``over.<path>`` al primo livello: la chiave collassa ``over``
+        # + path, i figli sono la strategy
+        if len(rest) == 1:
+            return "spread_strategy"
+        return _env_context(rest[1:])
+    if head == "sweep":
+        return "sweep" if len(rest) == 1 else "value"
+    if head == "n":
+        return "value"
+    return "value"
+
+
 def context_for_path(path: KeyPath, axis_names=frozenset()) -> str:
     """Contesto schema di un key-path concreto del documento.
 
@@ -552,28 +581,12 @@ def context_for_path(path: KeyPath, axis_names=frozenset()) -> str:
         if sub[0] != "spread":
             sub = _expand_dotted(sub, axis_names)
         if sub[0] == "spread":
-            if len(sub) == 1:
-                return "spread"
-            if sub[1] == "over":
-                if len(sub) == 2:
-                    return "over"
-                if len(sub) == 3:
-                    return "spread_strategy"
-                return _env_context(sub[3:])
-            if isinstance(sub[1], str) and sub[1].startswith("over."):
-                # dotted ``over.<path>`` al primo livello di spread: la chiave
-                # collassa ``over`` + path, i figli sono la strategy
-                if len(sub) == 2:
-                    return "spread_strategy"
-                return _env_context(sub[2:])
-            if sub[1] == "sweep":
-                return "sweep" if len(sub) == 2 else "value"
-            if sub[1] == "n":
-                return "value"
-            return "value"
+            return _spread_context(sub[1:])
         return context_for_path(sub, axis_names)
     if head == "base":
         return _engine_context(path[1:])
+    if head == "spread":
+        return _spread_context(path[1:])
     if head == "axes":
         if len(path) == 1:
             return "axes"
