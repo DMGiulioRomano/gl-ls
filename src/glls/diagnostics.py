@@ -898,8 +898,10 @@ def _check_over_path(bag: Bag, m: StudyModel, opath: KeyPath, dotted: str) -> No
     parts = dotted.split(".")
     head = parts[0]
     if head not in ("base", "axes", "stack", "sweep"):
+        sug = _suggest(head, ["base", "axes", "stack", "sweep"])
+        extra = (f" Forse intendevi '{'.'.join([sug, *parts[1:]])}'?" if sug else "")
         bag.add(opath,
-                f"spread.over: path '{dotted}' non punta a base./axes./stack./sweep.",
+                f"spread.over: path '{dotted}' non punta a base./axes./stack./sweep.{extra}",
                 types.DiagnosticSeverity.Warning, code="over-path")
         return
     if head in ("axes", "stack") and len(parts) >= 2 and m.axes:
@@ -972,7 +974,10 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
                     code="grain-reverse", prefer_value=True,
                     data={"fix": {"kind": "clear-value",
                                   "path": list(bpath + ("grain", "reverse"))}})
-        if grain.get("duration_unit") == "samples" and "duration" not in grain:
+        axis_governs_duration = any(
+            ax.path == "grain.duration" for ax in m.axes.values())
+        if (grain.get("duration_unit") == "samples" and "duration" not in grain
+                and not axis_governs_duration):
             bag.add(bpath + ("grain", "duration_unit"),
                     "Con duration_unit: samples la grain.duration va sempre "
                     "indicata esplicitamente (il default 0.05 e' in secondi).",

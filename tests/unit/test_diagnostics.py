@@ -288,6 +288,21 @@ def test_grain_duration_range_samples_not_flagged():
     assert "out-of-bounds" not in codes(text)
 
 
+def test_grain_duration_samples_without_duration_flagged():
+    text = BASE.replace("base:\n",
+                        "base:\n  grain:\n    duration_unit: samples\n")
+    assert "samples-duration" in codes(text)
+
+
+def test_grain_duration_samples_governed_by_axis_not_flagged():
+    # 'duration' non e' letterale in base.grain, ma un asse punta a
+    # grain.duration (issue): il runtime la inietta ad ogni breakpoint,
+    # 'duration' esplicita in base non serve.
+    text = (BASE.replace("base:\n", "base:\n  grain:\n    duration_unit: samples\n")
+            + "  grain.duration:\n    baseline: 512\n    values: [256, 1024]\n")
+    assert "samples-duration" not in codes(text)
+
+
 def test_grain_duration_samples_axis_values_not_flagged():
     text = BASE.replace(
         "base:\n",
@@ -580,6 +595,13 @@ def test_spread_dotted_bad_head_warns_on_effective_path():
     ds = diags_of(text)
     d = next(d for d in ds if d.code == "over-path")
     assert "'pointer.start'" in d.message
+
+
+def test_spread_dotted_bad_head_suggests_close_match():
+    text = _spread("        exes.grain.duration.base.values: [1, 2]\n")
+    ds = diags_of(text)
+    d = next(d for d in ds if d.code == "over-path")
+    assert "axes.grain.duration.base" in d.message
 
 
 def test_spread_dotted_ramp_non_dict_is_error():
