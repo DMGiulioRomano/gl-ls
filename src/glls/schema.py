@@ -287,6 +287,20 @@ _ROOT_KEYS = [
                  "la chiave `spread` eredita via deep-merge (come `sweep:`). "
                  "Puo' essere parziale (es. solo `n`); da solo non espande "
                  "nulla, serve una entry con `spread:` a valle.", kind="keyword"),
+    _k("gain_compensation", "**Blocco opzionale**: stima il livello di ogni "
+                            "stream *prima* del render (RMS del buffer sulla "
+                            "finestra di lettura) e scrive un offset di `volume` "
+                            "per stream, cosi' stream che granulano lo stesso "
+                            "sample in punti di lettura diversi arrivano al mix "
+                            "appaiati invece di mascherarsi. Vale **solo** sui "
+                            "documenti multi-stream (`stack:`/`versions:`); su "
+                            "uno studio senza di essi e' inerte (la correzione e' "
+                            "relativa: uno stream da solo non maschera nessuno). "
+                            "Due sole chiavi: `alpha` e `max_shift`.",
+       kind="keyword", snippet="gain_compensation:\n  alpha: ${1:0.7}"),
+    _k("percorso", "**Blocco top-level** (batteria di studi lungo un percorso): "
+                   "come gli altri processi multi-documento genera piu' "
+                   "stream/file.", kind="keyword"),
 ]
 
 _AXES_RESERVED = [
@@ -333,6 +347,15 @@ _VERSIONS_RESERVED = [
                 "ogni file attraversa tutte le variabili da subito. Assente = "
                 "prodotto cartesiano lessicografico (un file per valore della "
                 "prima variabile dichiarata).", kind="keyword"),
+]
+
+_GAIN_COMPENSATION_KEYS = [
+    _k("alpha", "Intensita' della correzione: float in `[0, 1]` (default 1.0). "
+                "`0` = nessuna correzione, `1` = stream contemporanei appaiati. "
+                "Interpola linearmente fra i due estremi.", kind="macro"),
+    _k("max_shift", "Tetto in dB alla correzione del singolo stream: float `> 0` "
+                    "(default 24.0). Limita di quanto il `volume` di uno stream "
+                    "puo' essere spostato.", kind="macro"),
 ]
 
 _STACK_RESERVED = [
@@ -425,6 +448,8 @@ CONTEXTS: Dict[str, List[Key]] = {
     "spread": _SPREAD_KEYS,
     "over": [],                      # path puntati
     "spread_strategy": _SPREAD_STRATEGY_KEYS,
+    "gain_compensation": _GAIN_COMPENSATION_KEYS,
+    "percorso": [],                  # schema interno non modellato: nomi liberi
     "let": [],
     "value": [],
 }
@@ -435,7 +460,7 @@ CLOSED_CONTEXTS = frozenset({
     "root", "engine_stream", "grain", "grain_envelope", "pointer", "pitch",
     "voices", "voices_pitch", "voices_onset", "voices_pointer", "voices_pan",
     "axis", "env", "engine_env", "ramp", "drift", "sweep", "walk",
-    "stream_override", "spread", "spread_strategy",
+    "stream_override", "spread", "spread_strategy", "gain_compensation",
 })
 
 
@@ -609,4 +634,11 @@ def context_for_path(path: KeyPath, axis_names=frozenset()) -> str:
             # variabile-generatore Y (Env: values | ramp | banda)
             return "value" if path[1] in ("onset", "duration", "chunk") else "env"
         return _env_context(path[2:])
+    if head == "gain_compensation":
+        # contesto chiuso: solo alpha/max_shift; i valori sono scalari
+        return "gain_compensation" if len(path) == 1 else "value"
+    if head == "percorso":
+        # blocco top-level riconosciuto ma con schema interno non modellato:
+        # contesto aperto, cosi' non fioccano falsi 'unknown-key' sui figli
+        return "percorso"
     return "value" if len(path) > 1 else "root"
