@@ -60,3 +60,31 @@ def test_dotted_child_of_axes_uses_boundary():
     # figlio diretto puntato di axes: negli override: asse + resto annidato
     assert schema.context_for_path(
         ("streams", "s", "axes", "grain.duration.ramp")) == "ramp"
+
+
+# --- versions: contesto e chiavi riservate (issue #17) -------------------
+
+def test_versions_block_context():
+    assert schema.context_for_path(("versions",)) == "versions"
+
+
+def test_versions_reserved_keys_are_scalars():
+    assert schema.context_for_path(("versions", "chunk")) == "value"
+    assert schema.context_for_path(("versions", "onset")) == "value"
+    assert schema.context_for_path(("versions", "duration")) == "value"
+
+
+def test_versions_variable_is_generator_env():
+    # una chiave non riservata e' una variabile-generatore Y (contesto env)
+    assert schema.context_for_path(("versions", "d")) == "env"
+    assert schema.context_for_path(("versions", "d", "ramp")) == "ramp"
+
+
+def test_versions_is_open_context():
+    # nomi di variabile liberi: non deve essere un contesto chiuso
+    assert "versions" not in schema.CLOSED_CONTEXTS
+
+
+def test_versions_reserved_keys_available():
+    names = [k.name for k in schema.keys_for("versions")]
+    assert names == ["onset", "duration", "chunk"]

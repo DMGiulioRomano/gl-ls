@@ -278,6 +278,11 @@ _ROOT_KEYS = [
                 "camminata-X.", kind="keyword"),
     _k("streams", "Varianti di ascolto con override parziali (deep-merge; le "
                   "liste rimpiazzano). Entry con `spread:` generano n stream.", kind="keyword"),
+    _k("versions", "Genera piu' file (una batteria di studi): ogni chiave e' una "
+                   "variabile-generatore Y (`values` | `ramp` | banda), il "
+                   "prodotto cartesiano delle variabili fa i file. Chiavi "
+                   "riservate `onset`/`duration` e `chunk` (raggruppamento "
+                   "diagonale) non sono variabili del prodotto.", kind="keyword"),
 ]
 
 _AXES_RESERVED = [
@@ -310,6 +315,20 @@ _SWEEP_KEYS = [
     _k("orderings", "Permutazioni esplicite: primo = asse lento (outer), "
                     "ultimo = veloce (inner)."),
     _k("stream_id", "(interno) id stream impostato dal resolver.", kind="internal"),
+]
+
+_VERSIONS_RESERVED = [
+    _k("onset", "Chiave riservata di `versions:`: onset assoluto (s) condiviso, "
+                "non una variabile del prodotto cartesiano.", kind="keyword"),
+    _k("duration", "Chiave riservata di `versions:`: durata (s) condivisa, non "
+                   "una variabile del prodotto cartesiano.", kind="keyword"),
+    _k("chunk", "Chiave riservata di `versions:`: intero `>= 1`. Riordina le "
+                "combinazioni per **traversata diagonale** della griglia (somma "
+                "degli indici crescente, non nesting lessicografico) e le taglia "
+                "in blocchi consecutivi di `chunk`, un file per blocco — cosi' "
+                "ogni file attraversa tutte le variabili da subito. Assente = "
+                "prodotto cartesiano lessicografico (un file per valore della "
+                "prima variabile dichiarata).", kind="keyword"),
 ]
 
 _STACK_RESERVED = [
@@ -397,6 +416,7 @@ CONTEXTS: Dict[str, List[Key]] = {
     "stack": _STACK_RESERVED,        # + nomi d'asse (camminate)
     "walk": _WALK_KEYS,
     "streams": [],                   # nomi liberi
+    "versions": _VERSIONS_RESERVED,  # + variabili-generatore Y libere
     "stream_override": _STREAM_OVERRIDE_KEYS,
     "spread": _SPREAD_KEYS,
     "over": [],                      # path puntati
@@ -567,5 +587,13 @@ def context_for_path(path: KeyPath, axis_names=frozenset()) -> str:
             return "stack"
         if len(path) == 2:
             return "value" if path[1] in ("seed", "unit") else "walk"
+        return _env_context(path[2:])
+    if head == "versions":
+        if len(path) == 1:
+            return "versions"
+        if len(path) == 2:
+            # chiavi riservate = scalari; ogni altra chiave e' una
+            # variabile-generatore Y (Env: values | ramp | banda)
+            return "value" if path[1] in ("onset", "duration", "chunk") else "env"
         return _env_context(path[2:])
     return "value" if len(path) > 1 else "root"

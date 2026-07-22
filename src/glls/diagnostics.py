@@ -105,6 +105,7 @@ def collect(doc: Document, m: StudyModel) -> List[types.Diagnostic]:
     _check_axes(bag, doc, m)
     _check_sweep(bag, doc, m, ("sweep",))
     _check_stack(bag, doc, m, ())
+    _check_versions(bag, doc, m)
     _check_streams(bag, doc, m)
     _check_engine_block(bag, doc, m, ("base",))
     _check_unknown_keys(bag, doc, m)
@@ -586,6 +587,31 @@ def _check_walk_runaway(bag: Bag, doc: Document, m: StudyModel,
                 "anti-runaway.",
                 types.DiagnosticSeverity.Warning, code="walk-runaway",
                 prefer_value=True)
+
+
+def _check_versions(bag: Bag, doc: Document, m: StudyModel) -> None:
+    """Blocco ``versions:`` (batteria di studi). Le chiavi riservate
+    ``onset``/``duration``/``chunk`` non sono variabili del prodotto cartesiano
+    (niente guardia generatore/referenziata). Qui si valida solo ``chunk``:
+    intero ``>= 1`` (raggruppamento diagonale), non bool ne' float."""
+    vpath: KeyPath = ("versions",)
+    versions = doc.get(vpath)
+    if versions is None:
+        return
+    if not isinstance(versions, dict):
+        bag.add(vpath, "'versions' deve essere un mapping (variabili-generatore "
+                "Y + chiavi riservate onset/duration/chunk).",
+                code="versions-type")
+        return
+    if "chunk" in versions:
+        cv = versions.get("chunk")
+        # bool e' sottoclasse di int: va escluso esplicitamente
+        if isinstance(cv, bool) or not isinstance(cv, int) or cv < 1:
+            bag.add(vpath + ("chunk",),
+                    "versions.chunk deve essere un intero >= 1 (raggruppamento "
+                    "diagonale delle combinazioni in blocchi consecutivi), non "
+                    "un bool ne' un float.",
+                    code="versions-chunk", prefer_value=True)
 
 
 def _check_streams(bag: Bag, doc: Document, m: StudyModel) -> None:

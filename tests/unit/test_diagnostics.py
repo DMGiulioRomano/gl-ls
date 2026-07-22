@@ -1009,3 +1009,56 @@ def test_over_path_dotted_axis_ambiguous():
           values: [0.01, 0.02]
 """
     assert "ambiguous-axis" in codes(text)
+
+
+# --- versions: chunk (raggruppamento diagonale, issue #17) ---------------
+
+VERSIONS = BASE + """versions:
+  d: {ramp: {start: 20, stop: 3, step: 3}}
+  g: {values: [4, 50]}
+"""
+
+
+def test_versions_chunk_valid_no_diagnostics():
+    text = VERSIONS + "  chunk: 10\n"
+    cs = codes(text)
+    assert "versions-chunk" not in cs and "unknown-key" not in cs
+
+
+def test_versions_without_chunk_unchanged():
+    # senza chunk il blocco resta valido; le variabili non sono segnalate
+    cs = codes(VERSIONS)
+    assert "versions-chunk" not in cs and "unknown-key" not in cs
+
+
+def test_versions_chunk_zero_flagged():
+    text = VERSIONS + "  chunk: 0\n"
+    assert "versions-chunk" in codes(text)
+
+
+def test_versions_chunk_float_flagged():
+    text = VERSIONS + "  chunk: 1.5\n"
+    assert "versions-chunk" in codes(text)
+
+
+def test_versions_chunk_bool_flagged():
+    # bool e' sottoclasse di int: non deve passare per intero
+    text = VERSIONS + "  chunk: true\n"
+    assert "versions-chunk" in codes(text)
+
+
+def test_versions_chunk_string_flagged():
+    text = VERSIONS + "  chunk: dieci\n"
+    assert "versions-chunk" in codes(text)
+
+
+def test_versions_non_mapping_flagged():
+    text = BASE + "versions: 5\n"
+    assert "versions-type" in codes(text)
+
+
+def test_versions_generator_variables_not_flagged():
+    # onset/duration/chunk sono riservate; ogni altra chiave e' una variabile
+    # generatore Y e non va segnalata come chiave sconosciuta
+    text = VERSIONS + "  onset: 0\n  duration: 6\n  chunk: 4\n"
+    assert codes(text) == set()

@@ -15,6 +15,7 @@ from .yamlpos import Document, KeyPath
 
 AXES_RESERVED = ("interpolation", "seed")
 STACK_RESERVED = ("seed", "unit")
+VERSIONS_RESERVED = ("onset", "duration", "chunk")
 GEN_MARKERS = ("values", "ramp", "base")
 BAND_KEYS = frozenset({"base", "range", "n", "seed", "distribution", "drift"})
 
