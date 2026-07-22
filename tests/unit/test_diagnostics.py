@@ -429,9 +429,91 @@ def test_expr_valid_is_clean():
     assert not any(d.code == "expr" for d in diags_of(text))
 
 
-def test_duplicate_key_warning():
+def test_duplicate_key_error_with_first_line_reference():
+    from lsprotocol import types
     text = BASE + "seed: 1\nseed: 2\n"
-    assert "duplicate-key" in codes(text)
+    dups = [d for d in diags_of(text) if d.code == "duplicate-key"]
+    assert len(dups) == 1
+    d = dups[0]
+    # e' un errore (non piu' un warning): YAML scarta silenziosamente le
+    # occorrenze precedenti, quindi il file mente
+    assert d.severity == types.DiagnosticSeverity.Error
+    # rimanda alla riga della prima occorrenza (1-based); 'seed: 1' e' la
+    # penultima riga di un testo che finisce con newline
+    first_line_1based = text.rstrip("\n").count("\n")  # riga di 'seed: 1' (1-based)
+    assert f"riga {first_line_1based}" in d.message
+    # la diagnostica e' ancorata alla seconda occorrenza
+    assert d.range.start.line == first_line_1based
+
+
+# --- gain_compensation: nuovo blocco top-level (issue #19) ----------------
+
+GC_BASE = BASE + "stack: {}\n"
+
+
+def test_gain_compensation_valid_no_diag():
+    text = GC_BASE + "gain_compensation:\n  alpha: 0.7\n  max_shift: 12\n"
+    assert not any(str(c).startswith("gain-compensation") for c in codes(text))
+
+
+def test_gain_compensation_alpha_out_of_range():
+    text = GC_BASE + "gain_compensation:\n  alpha: 1.5\n"
+    assert "gain-compensation-alpha" in codes(text)
+
+
+def test_gain_compensation_alpha_negative():
+    text = GC_BASE + "gain_compensation:\n  alpha: -0.1\n"
+    assert "gain-compensation-alpha" in codes(text)
+
+
+def test_gain_compensation_max_shift_non_positive():
+    text = GC_BASE + "gain_compensation:\n  max_shift: 0\n"
+    assert "gain-compensation-max-shift" in codes(text)
+
+
+def test_gain_compensation_not_a_dict():
+    text = GC_BASE + "gain_compensation: 0.7\n"
+    assert "gain-compensation-type" in codes(text)
+
+
+def test_gain_compensation_typo_key_flagged():
+    # contesto chiuso: un refuso 'alfa' e' unknown-key con suggerimento
+    text = GC_BASE + "gain_compensation:\n  alfa: 0.7\n"
+    ds = diags_of(text)
+    typo = [d for d in ds if d.code == "unknown-key" and "alfa" in d.message]
+    assert typo
+    assert "alpha" in typo[0].message
+    assert typo[0].data == {"fix": {"kind": "rename", "new": "alpha"}}
+
+
+def test_gain_compensation_inert_without_multistream():
+    from lsprotocol import types
+    # senza stack: ne' versions: il blocco e' inerte -> hint
+    text = BASE + "gain_compensation:\n  alpha: 0.7\n"
+    ds = diags_of(text)
+    inert = [d for d in ds if d.code == "gain-compensation-inert"]
+    assert inert
+    assert inert[0].severity == types.DiagnosticSeverity.Hint
+
+
+def test_gain_compensation_not_inert_with_versions():
+    text = (BASE + "versions:\n  d: {values: [1, 2]}\n"
+            "gain_compensation:\n  alpha: 0.7\n")
+    assert "gain-compensation-inert" not in codes(text)
+
+
+def test_gain_compensation_not_inert_with_stack():
+    text = GC_BASE + "gain_compensation:\n  alpha: 0.7\n"
+    assert "gain-compensation-inert" not in codes(text)
+
+
+# --- percorso: blocco top-level riconosciuto (issue #19, nota a margine) --
+
+def test_percorso_not_flagged_unknown_key():
+    text = BASE + "percorso:\n  foo: 1\n  bar:\n    baz: 2\n"
+    ds = diags_of(text)
+    # ne' 'percorso' ne' i suoi figli producono unknown-key
+    assert not any(d.code == "unknown-key" for d in ds)
 
 
 def test_syntax_error_single_diag():

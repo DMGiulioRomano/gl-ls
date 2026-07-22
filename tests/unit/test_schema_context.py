@@ -88,3 +88,46 @@ def test_versions_is_open_context():
 def test_versions_reserved_keys_available():
     names = [k.name for k in schema.keys_for("versions")]
     assert names == ["onset", "duration", "chunk"]
+
+
+# --- gain_compensation: contesto chiuso (issue #19) ----------------------
+
+def test_gain_compensation_block_context():
+    assert schema.context_for_path(("gain_compensation",)) == "gain_compensation"
+
+
+def test_gain_compensation_values_are_scalars():
+    assert schema.context_for_path(("gain_compensation", "alpha")) == "value"
+    assert schema.context_for_path(("gain_compensation", "max_shift")) == "value"
+
+
+def test_gain_compensation_is_closed_context():
+    # contesto chiuso: un refuso e' un unknown-key
+    assert "gain_compensation" in schema.CLOSED_CONTEXTS
+
+
+def test_gain_compensation_keys_available():
+    names = [k.name for k in schema.keys_for("gain_compensation")]
+    assert names == ["alpha", "max_shift"]
+
+
+def test_gain_compensation_is_root_key():
+    root_names = {k.name for k in schema.keys_for("root")}
+    assert "gain_compensation" in root_names
+
+
+# --- percorso: blocco top-level riconosciuto, interno aperto (issue #19) --
+
+def test_percorso_block_context():
+    assert schema.context_for_path(("percorso",)) == "percorso"
+    # anche i figli restano nel contesto aperto (schema interno non modellato)
+    assert schema.context_for_path(("percorso", "qualcosa")) == "percorso"
+
+
+def test_percorso_is_open_context():
+    assert "percorso" not in schema.CLOSED_CONTEXTS
+
+
+def test_percorso_is_root_key():
+    root_names = {k.name for k in schema.keys_for("root")}
+    assert "percorso" in root_names

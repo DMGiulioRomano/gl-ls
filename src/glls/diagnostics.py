@@ -97,15 +97,19 @@ def collect(doc: Document, m: StudyModel) -> List[types.Diagnostic]:
     if not isinstance(doc.data, dict):
         return bag.items
 
-    for path, span in doc.duplicates:
-        bag.add(path, f"Chiave duplicata '{path[-1]}': YAML tiene solo l'ultima.",
-                types.DiagnosticSeverity.Warning, code="duplicate-key", span=span)
+    for path, span, first in doc.duplicates:
+        bag.add(path,
+                f"Chiave duplicata '{path[-1]}': gia' definita a riga "
+                f"{first.start_line + 1}. YAML tiene solo l'ultima occorrenza, "
+                "quindi le righe sopra sono ignorate silenziosamente.",
+                types.DiagnosticSeverity.Error, code="duplicate-key", span=span)
 
     _check_root(bag, doc, m)
     _check_axes(bag, doc, m)
     _check_sweep(bag, doc, m, ("sweep",))
     _check_stack(bag, doc, m, ())
     _check_versions(bag, doc, m)
+    _check_gain_compensation(bag, doc, m)
     _check_streams(bag, doc, m)
     _check_global_spread(bag, doc, m)
     _check_engine_block(bag, doc, m, ("base",))
@@ -613,6 +617,46 @@ def _check_versions(bag: Bag, doc: Document, m: StudyModel) -> None:
                     "diagonale delle combinazioni in blocchi consecutivi), non "
                     "un bool ne' un float.",
                     code="versions-chunk", prefer_value=True)
+
+
+def _check_gain_compensation(bag: Bag, doc: Document, m: StudyModel) -> None:
+    """Blocco top-level opzionale ``gain_compensation:`` (granstudies
+    ``gainmap.parse_config``). Due sole chiavi: ``alpha`` in ``[0, 1]`` e
+    ``max_shift`` ``> 0`` (dB) — i bound che il runtime da' solo al parse. La
+    compensazione vale solo sui documenti multi-stream (``stack:``/``versions:``):
+    altrove il blocco e' inerte (hint informativo). Le chiavi estranee (es. un
+    refuso ``alfa:``) le intercetta ``_check_unknown_keys`` sul contesto chiuso."""
+    gpath: KeyPath = ("gain_compensation",)
+    gc = doc.get(gpath)
+    if gc is None:
+        return
+    if not isinstance(gc, dict):
+        bag.add(gpath,
+                "'gain_compensation' e' un dict {alpha?, max_shift?} "
+                "(alpha in [0, 1], max_shift > 0 dB), non un valore nudo.",
+                code="gain-compensation-type")
+        return
+    if "alpha" in gc:
+        a = _num(gc.get("alpha"))
+        if a is None or not (0.0 <= a <= 1.0):
+            bag.add(gpath + ("alpha",),
+                    "gain_compensation.alpha deve essere un numero in [0, 1] "
+                    "(0 = nessuna correzione, 1 = stream contemporanei appaiati).",
+                    code="gain-compensation-alpha", prefer_value=True)
+    if "max_shift" in gc:
+        ms = _num(gc.get("max_shift"))
+        if ms is None or ms <= 0:
+            bag.add(gpath + ("max_shift",),
+                    "gain_compensation.max_shift deve essere un numero > 0 "
+                    "(tetto in dB alla correzione del singolo stream).",
+                    code="gain-compensation-max-shift", prefer_value=True)
+    if not m.has_stack and doc.get(("versions",)) is None:
+        bag.add(gpath,
+                "gain_compensation e' dichiarato ma lo studio non ha 'stack:' "
+                "ne' 'versions:': senza documenti multi-stream la compensazione "
+                "e' inerte (la correzione e' relativa, uno stream da solo non "
+                "maschera nessuno).",
+                types.DiagnosticSeverity.Hint, code="gain-compensation-inert")
 
 
 def _check_streams(bag: Bag, doc: Document, m: StudyModel) -> None:

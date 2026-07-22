@@ -5,7 +5,8 @@ albero di nodi (``yaml.compose``) e se ne ricava una tabella laterale
 ``{tupla di chiavi -> Entry}`` con gli span (0-based, stile LSP) di chiave e
 valore. Gli indici di lista entrano nel path come interi. Le chiavi duplicate
 in una mapping (safe_load tiene l'ultima, silenziosamente) vengono raccolte a
-parte per la diagnostica.
+parte per la diagnostica, con lo span della ripetizione e quello della prima
+occorrenza (a cui la diagnostica rimanda).
 
 Su errore di sintassi il parse ritorna comunque un ``Document`` con
 ``syntax_error`` valorizzato e ``data=None``: le feature che possono lavorare
@@ -69,7 +70,8 @@ class Document:
     text: str
     data: Any = None
     entries: Dict[KeyPath, Entry] = field(default_factory=dict)
-    duplicates: List[Tuple[KeyPath, Span]] = field(default_factory=list)
+    # (key-path, span della ripetizione, span della prima occorrenza)
+    duplicates: List[Tuple[KeyPath, Span, Span]] = field(default_factory=list)
     syntax_error: Optional[SyntaxIssue] = None
 
     # ------------------------------------------------------------------
@@ -122,15 +124,18 @@ class Document:
 
 def _walk(node: yaml.Node, path: KeyPath, doc: Document) -> None:
     if isinstance(node, yaml.MappingNode):
-        seen: Dict[str, Span] = {}
+        # prima occorrenza di ogni chiave (per rimandare la diagnostica alla
+        # riga originale); le ripetizioni successive puntano sempre a questa
+        first_seen: Dict[str, Span] = {}
         for key_node, value_node in node.value:
             key = getattr(key_node, "value", None)
             if not isinstance(key, str):
                 continue
             kspan = node_span(key_node)
-            if key in seen:
-                doc.duplicates.append((path + (key,), kspan))
-            seen[key] = kspan
+            if key in first_seen:
+                doc.duplicates.append((path + (key,), kspan, first_seen[key]))
+            else:
+                first_seen[key] = kspan
             child = path + (key,)
             doc.entries[child] = Entry(
                 path=child,

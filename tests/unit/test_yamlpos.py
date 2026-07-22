@@ -22,7 +22,19 @@ def test_syntax_error_reported():
 def test_duplicate_keys_detected():
     doc = yamlpos.parse("base:\n  volume: -6\n  volume: -3\n")
     assert len(doc.duplicates) == 1
-    assert doc.duplicates[0][0] == ("base", "volume")
+    path, dup_span, first_span = doc.duplicates[0]
+    assert path == ("base", "volume")
+    # la ripetizione e' a riga 2, la prima occorrenza a riga 1 (0-based)
+    assert dup_span.start_line == 2
+    assert first_span.start_line == 1
+
+
+def test_duplicate_keys_reference_first_occurrence():
+    # tre occorrenze: entrambe le ripetizioni rimandano sempre alla prima
+    doc = yamlpos.parse("a: 1\na: 2\na: 3\n")
+    assert len(doc.duplicates) == 2
+    assert all(first.start_line == 0 for _, _, first in doc.duplicates)
+    assert [dup.start_line for _, dup, _ in doc.duplicates] == [1, 2]
 
 
 def test_path_at():
