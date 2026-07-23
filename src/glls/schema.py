@@ -91,6 +91,32 @@ _ENV_KEYS = [
     _k("let", _GEN_DOC["let"], kind="macro"),
 ]
 
+# Manopole ``let:`` a tre livelli (documento / gruppo / voce). Il blocco lega
+# nomi a valori riusati dalle espressioni; il livello ne cambia i valori
+# ammessi e le regole di scope (vedi diagnostics._check_let_blocks).
+_LET_DOC_DOCUMENT = (
+    "**Manopole di documento.** Blocco `let: {nome: valore}` sibling di "
+    "`base:`/`axes:`/`stack:`/`versions:`: nomi in scope su tutto il documento "
+    "(ogni gruppo e voce li vede). Valori ammessi: scalare, envelope disegnato "
+    "`[[t, v], ...]`, banda/`ramp`/`values` (compilati in envelope una volta), "
+    "nodo-expr derivato che referenzia altre manopole. Una manopola non "
+    "referenziata da nessuna espressione e' un errore; un gruppo/una voce non "
+    "puo' ridichiararne il nome (ombreggiamento)."
+)
+_LET_DOC_GROUP = (
+    "**Manopole di gruppo.** Blocco `let:` in una entry di `streams:`: nomi in "
+    "scope per lo stream (e per il suo `spread.let`). Stessi valori del `let:` "
+    "di documento; non puo' ridichiarare un nome gia' definito nel `let:` di "
+    "documento. Due gruppi diversi possono usare lo stesso nome (fratelli)."
+)
+_LET_DOC_SPREAD = (
+    "**Manopole di voce.** Blocco `let:` dentro `spread:`, accanto a `n`/`over`: "
+    "un valore pescato/derivato per stream generato. Solo `expr` (con `i`/`n`) e "
+    "banda; `values`/`ramp` sono errore (conteggio ridondante con `over`). Non "
+    "puo' ridichiarare un nome del `let:` di gruppo o documento, ne' omonimo di "
+    "una variabile di `versions:`."
+)
+
 _RAMP_KEYS = [
     _k("start", "Primo valore della rampa."),
     _k("stop", "Ultimo valore (incluso se cade sulla griglia, mai oltrepassato). "
@@ -301,6 +327,8 @@ _ROOT_KEYS = [
     _k("percorso", "**Blocco top-level** (batteria di studi lungo un percorso): "
                    "come gli altri processi multi-documento genera piu' "
                    "stream/file.", kind="keyword"),
+    _k("let", _LET_DOC_DOCUMENT, kind="keyword",
+       snippet="let:\n  ${1:manopola}: ${2:valore}"),
 ]
 
 _AXES_RESERVED = [
@@ -393,6 +421,8 @@ _STREAM_OVERRIDE_KEYS = [
        kind="keyword",
        snippet="spread:\n  n: ${1:8}\n  over:\n    ${2:base.onset}:\n"
                "      ramp: {start: ${3:0}, step: ${4:2}}"),
+    _k("let", _LET_DOC_GROUP, kind="keyword",
+       snippet="let:\n  ${1:manopola}: ${2:valore}"),
 ]
 
 _SPREAD_KEYS = [
@@ -404,6 +434,8 @@ _SPREAD_KEYS = [
                "anche la forma dotted `over.<path>: ...` al primo livello."),
     _k("sweep", "Blocco sweep esplicito: **riattiva** lo sweep dei generati "
                 "(di default spread lo spegne: ascolto verticale)."),
+    _k("let", _LET_DOC_SPREAD, kind="macro",
+       snippet="let:\n  ${1:manopola}: {expr: \"${2:i}\"}"),
 ]
 
 _SPREAD_STRATEGY_KEYS = _ENV_KEYS  # values | ramp | banda | expr (+n/seed/...)
@@ -527,6 +559,16 @@ def _env_context(rest: KeyPath) -> str:
     return "value"
 
 
+def _let_context(rest: KeyPath) -> str:
+    """Contesto dentro un blocco ``let:`` di manopole (documento / gruppo /
+    voce): ``rest`` e' il path dopo la chiave ``let`` stessa. I nomi delle
+    manopole sono liberi; il loro valore riapre un contesto Env ricorsivo
+    (scalare, envelope, banda/ramp/values, nodo-expr)."""
+    if not rest:
+        return "let"
+    return _env_context(rest[1:])
+
+
 def _expand_dotted(rest: KeyPath, axis_names=frozenset()) -> KeyPath:
     """Espande i segmenti puntati di un path di override nella forma annidata.
 
@@ -579,6 +621,9 @@ def _spread_context(rest: KeyPath) -> str:
         return _env_context(rest[1:])
     if head == "sweep":
         return "sweep" if len(rest) == 1 else "value"
+    if head == "let":
+        # manopole di voce: nomi liberi al primo livello, valore Env ricorsivo
+        return _let_context(rest[1:])
     if head == "n":
         return "value"
     return "value"
@@ -610,6 +655,10 @@ def context_for_path(path: KeyPath, axis_names=frozenset()) -> str:
         return context_for_path(sub, axis_names)
     if head == "base":
         return _engine_context(path[1:])
+    if head == "let":
+        # blocco ``let:`` di documento (o di gruppo, raggiunto per ricorsione
+        # dagli override di stream): manopole a nomi liberi, valori Env
+        return _let_context(path[1:])
     if head == "spread":
         return _spread_context(path[1:])
     if head == "axes":

@@ -77,6 +77,12 @@ _FUNCTIONS = {
     "mix": (None, 3, 3),
 }
 
+# Nomi che un'espressione risolve senza scope (funzioni primitive e costanti):
+# non sono manopole, quindi vanno esclusi quando si cercano i riferimenti a
+# nomi di ``let``.
+FUNCTION_NAMES = frozenset(_FUNCTIONS)
+CONSTANT_NAMES = frozenset(_CONSTANTS)
+
 _NODE_KEYS = frozenset({"expr", "let"})
 
 # Guardia di profondita' degli expr annidati in ``let`` (granulation-studies
@@ -88,6 +94,24 @@ _MAX_LET_DEPTH = 8
 
 def is_expr_node(spec: Any) -> bool:
     return isinstance(spec, dict) and "expr" in spec
+
+
+def names_in(text: Any) -> set:
+    """I nomi (identificatori) referenziati da ``text``, esclusi funzioni e
+    costanti primitive: i candidati a manopole di ``let`` che l'espressione usa.
+
+    Tollerante: una stringa non valida sintatticamente ritorna l'insieme vuoto
+    (l'errore lo segnala la valutazione vera e propria)."""
+    if not isinstance(text, str):
+        return set()
+    try:
+        tree = ast.parse(text, mode="eval")
+    except SyntaxError:
+        return set()
+    names = {
+        node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+    }
+    return names - FUNCTION_NAMES - CONSTANT_NAMES
 
 
 def parse_expr_node(

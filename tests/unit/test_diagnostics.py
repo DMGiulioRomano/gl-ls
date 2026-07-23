@@ -1216,3 +1216,250 @@ streams:
           expr: "i * 27"
 """
     assert "spread-no-n" not in codes(text)
+
+
+# ---------------------------------------------------------------------------
+# Manopole let: tre livelli, spread.let, versions Forma 1/2 (issue #21)
+
+
+def _with_doc_let(let_block, extra=""):
+    return BASE.replace("base:\n", let_block + "base:\n") + extra
+
+
+def test_doc_let_referenced_is_clean():
+    # una manopola di documento referenziata da una expr non e' segnalata
+    text = _with_doc_let(
+        "let:\n  gain: -6\n",
+        "").replace(
+        "base:\n  onset: 0\n",
+        'base:\n  onset: 0\n  volume:\n    expr: "gain - 1"\n')
+    assert not any(d.code.startswith("let-") for d in diags_of(text))
+
+
+def test_doc_let_unreferenced_flagged():
+    text = BASE + "let:\n  gain: -6\n"
+    assert "let-unreferenced" in codes(text)
+
+
+def test_doc_let_key_not_unknown():
+    # prima di issue #21 'let' top-level era una chiave sconosciuta
+    text = BASE.replace(
+        "base:\n  onset: 0\n",
+        'base:\n  onset: 0\n  volume:\n    expr: "gain - 1"\n') + "let:\n  gain: -6\n"
+    assert "unknown-key" not in codes(text)
+
+
+def test_doc_let_derived_knob_references_sibling_clean():
+    # nodo-expr derivato che referenzia un'altra manopola dello stesso let:
+    text = BASE.replace(
+        "base:\n  onset: 0\n",
+        'base:\n  onset: 0\n  volume:\n    expr: "shaped - 1"\n') + (
+        "let:\n"
+        "  env: [[0, 1], [1, 2]]\n"
+        '  shaped: {expr: "env * 3"}\n')
+    assert not any(d.code in ("expr", "let-unreferenced") for d in diags_of(text))
+
+
+def test_doc_let_expr_env_times_env_flagged():
+    # due manopole-envelope moltiplicate: Env⊙Env resta un errore
+    text = BASE.replace(
+        "base:\n  onset: 0\n",
+        'base:\n  onset: 0\n  volume:\n    expr: "a * b"\n') + (
+        "let:\n"
+        "  a: [[0, 1], [1, 2]]\n"
+        "  b: [[0, 1], [1, 2]]\n")
+    assert any(d.code == "expr" and "due Env" in d.message for d in diags_of(text))
+
+
+def _group_let(group_let, over='        base.onset:\n          expr: "i * k"\n'):
+    return BASE + "streams:\n  s:\n" + group_let
+
+
+def test_group_let_shadows_document_let():
+    text = (BASE.replace(
+        "base:\n  onset: 0\n",
+        'base:\n  onset: 0\n  volume:\n    expr: "gain - 1"\n')
+        + "let:\n  gain: -6\n"
+        + "streams:\n  s:\n    let:\n      gain: {expr: \"gain + 1\"}\n")
+    assert "let-shadow" in codes(text)
+
+
+def test_group_let_sibling_names_ok():
+    # due gruppi diversi con lo stesso nome sono leciti (fratelli)
+    text = BASE + (
+        "streams:\n"
+        "  s1:\n"
+        "    let:\n      k: 1\n"
+        "    base:\n      volume:\n        expr: \"k - 1\"\n"
+        "  s2:\n"
+        "    let:\n      k: 2\n"
+        "    base:\n      volume:\n        expr: \"k - 2\"\n")
+    assert "let-shadow" not in codes(text)
+
+
+def test_group_let_unreferenced_flagged():
+    text = BASE + "streams:\n  s:\n    let:\n      k: 1\n"
+    assert "let-unreferenced" in codes(text)
+
+
+def test_spread_let_values_rejected():
+    text = BASE + """streams:
+  fan:
+    spread:
+      n: 3
+      over:
+        base.onset:
+          expr: "i * v"
+      let:
+        v: {values: [1, 2, 3]}
+"""
+    assert "spread-let-form" in codes(text)
+
+
+def test_spread_let_ramp_rejected():
+    text = BASE + """streams:
+  fan:
+    spread:
+      n: 3
+      over:
+        base.onset:
+          expr: "i * v"
+      let:
+        v: {ramp: {start: 0, stop: 2, step: 1}}
+"""
+    assert "spread-let-form" in codes(text)
+
+
+def test_spread_let_expr_clean():
+    text = BASE + """streams:
+  fan:
+    spread:
+      n: 3
+      over:
+        base.onset:
+          expr: "i * v"
+      let:
+        v: {expr: "i * 0.1"}
+"""
+    assert diags_of(text) == []
+
+
+def test_spread_let_band_clean():
+    text = BASE + """streams:
+  fan:
+    spread:
+      n: 3
+      over:
+        base.onset:
+          expr: "i * v"
+      let:
+        v: {base: 1, range: 2}
+"""
+    assert diags_of(text) == []
+
+
+def test_spread_let_key_not_unknown():
+    # spread.let e' legittima (prima: 'chiave non ammessa, solo n/over')
+    text = BASE + """streams:
+  fan:
+    spread:
+      n: 3
+      over:
+        base.onset:
+          expr: "i * v"
+      let:
+        v: {expr: "i"}
+"""
+    assert "unknown-key" not in codes(text)
+
+
+def test_spread_let_expr_error_propagated():
+    text = BASE + """streams:
+  fan:
+    spread:
+      n: 3
+      over:
+        base.onset:
+          expr: "i * v"
+      let:
+        v: {expr: "boh"}
+"""
+    assert "expr" in codes(text)
+
+
+def test_spread_let_shadows_group_let():
+    text = BASE + """streams:
+  s:
+    let:
+      k: 1
+    base:
+      volume:
+        expr: "k - 1"
+    spread:
+      n: 3
+      over:
+        base.onset:
+          expr: "i * k"
+      let:
+        k: {expr: "i"}
+"""
+    assert "let-shadow" in codes(text)
+
+
+def test_spread_let_collides_with_versions_variable():
+    text = BASE + """versions:
+  d: {values: [1, 2]}
+streams:
+  fan:
+    spread:
+      n: 3
+      over:
+        base.onset:
+          expr: "i * d"
+      let:
+        d: {expr: "i"}
+"""
+    assert "let-versions-collision" in codes(text)
+
+
+# --- versions: assi ortogonali Forma 1 / Forma 2 -------------------------
+
+
+def test_versions_form1_covariant_clean():
+    text = BASE + """versions:
+  grana:
+    size: {values: [1, 2, 3]}
+    dens: {ramp: {start: 1, stop: 10, step: 1}}
+"""
+    cs = codes(text)
+    assert "versions-mixed-axis" not in cs and "unknown-key" not in cs
+
+
+def test_versions_form2_states_clean():
+    text = BASE + """versions:
+  densita:
+    d0: {onset: 0, respiro: 1}
+    respiroso: {onset: 2, respiro: [[0, 1], [1, 2]]}
+"""
+    cs = codes(text)
+    assert "versions-mixed-axis" not in cs and "unknown-key" not in cs
+
+
+def test_versions_mixed_axis_flagged():
+    text = BASE + """versions:
+  misto:
+    size: {values: [1, 2]}
+    stato: {onset: 0}
+"""
+    assert "versions-mixed-axis" in codes(text)
+
+
+def test_versions_single_knob_historical_unchanged():
+    text = BASE + "versions:\n  d: {values: [1, 2]}\n"
+    assert "versions-mixed-axis" not in codes(text)
+
+
+def test_versions_reserved_keys_not_axes():
+    # onset/duration/chunk non sono assi: non passano dal discriminatore
+    text = BASE + "versions:\n  d: {values: [1, 2]}\n  onset: 0\n  duration: 6\n"
+    assert "versions-mixed-axis" not in codes(text)
