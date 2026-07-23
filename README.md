@@ -25,6 +25,13 @@ Language server (LSP) per il **linguaggio di granulazione** degli
 - coerenza dei conteggi in `spread` (n dichiarato vs posseduti);
 - **nodi-expr valutati davvero** (stessa grammatica del runtime): nomi ignoti,
   Env⊙Env, divisione per zero, `i`/`n` riservati in spread;
+- **manopole `let:`** a tre livelli (documento / gruppo `streams.*` / voce
+  `spread.let`): ombreggiamento fra i livelli vietato, manopola non
+  referenziata da nessuna espressione, `values`/`ramp` in `spread.let`, nomi in
+  scope delle expr risolti anche sulle manopole; collisione fra `spread.let` e
+  le variabili di `versions:`;
+- **`versions:` ad assi ortogonali**: discriminatore Forma 1 (manopole
+  co-varianti) / Forma 2 (stati nominati) e segnalazione degli assi misti;
 - guardia anti-runaway: stima dei breakpoint della camminata-X (> 10000 = errore
   a runtime);
 - blocco pitch unit-driven, finestre sconosciute, `reverse: true`,

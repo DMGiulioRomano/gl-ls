@@ -21,6 +21,7 @@ from .model import (
     AXES_RESERVED,
     GEN_MARKERS,
     STACK_RESERVED,
+    VERSIONS_RESERVED,
     StudyModel,
     expand_over_items,
     over_items,
@@ -113,6 +114,7 @@ def collect(doc: Document, m: StudyModel) -> List[types.Diagnostic]:
     _check_streams(bag, doc, m)
     _check_global_spread(bag, doc, m)
     _check_engine_block(bag, doc, m, ("base",))
+    _check_let_blocks(bag, doc, m)
     _check_unknown_keys(bag, doc, m)
     _check_expr_nodes(bag, doc, m)
     return bag.items
@@ -618,6 +620,57 @@ def _check_versions(bag: Bag, doc: Document, m: StudyModel) -> None:
                     "un bool ne' un float.",
                     code="versions-chunk", prefer_value=True)
 
+    # discriminatore d'asse: ogni chiave non riservata e' un asse ortogonale.
+    # Il valore ne sceglie la forma (riconoscimento banda-vs-bundle).
+    for name, val in versions.items():
+        if name in VERSIONS_RESERVED:
+            continue
+        form, seq, bundle = _versions_axis_form(val)
+        if form == "mixed":
+            bag.add(vpath + (name,),
+                    f"versions: asse '{name}' misto — manopole a sequenza "
+                    f"{sorted(seq)} accanto a stati/bundle {sorted(bundle)}. Un "
+                    "asse e' o co-variante (Forma 1: dict di sequenze "
+                    "values/ramp/banda/lista) o a stati (Forma 2: dict di bundle), "
+                    "non entrambi.",
+                    code="versions-mixed-axis")
+
+
+def _is_versions_sequence(sub: Any) -> bool:
+    """Un valore di sotto-chiave di un asse ``versions:`` e' una *sequenza*
+    (manopola co-variante, Forma 1) se e' una lista o un dict-generatore
+    (``values``/``ramp``/banda) — lo stesso riconoscimento banda-vs-bundle
+    dell'engine. Un dict non-generatore e' invece un *bundle* (stato, Forma 2)."""
+    if isinstance(sub, list):
+        return True
+    if isinstance(sub, dict) and any(mk in sub for mk in GEN_MARKERS):
+        return True
+    return False
+
+
+def _versions_axis_form(val: Any):
+    """``(forma, chiavi-sequenza, chiavi-bundle)`` di un asse ``versions:``.
+
+    ``forma`` in ``{"single", "form1", "form2", "mixed", "empty"}``:
+    - ``single``: generatore/lista singola -> asse a una manopola omonima
+      (forma piatta storica);
+    - ``form1``: dict di sole sequenze -> manopole co-varianti;
+    - ``form2``: dict di soli bundle -> stati nominati;
+    - ``mixed``: sequenze e bundle mescolati nello stesso asse (errore).
+    """
+    if not isinstance(val, dict) or any(mk in val for mk in GEN_MARKERS):
+        return "single", [], []
+    seq = [k for k, sub in val.items() if _is_versions_sequence(sub)]
+    bundle = [k for k, sub in val.items()
+              if isinstance(sub, dict) and not any(mk in sub for mk in GEN_MARKERS)]
+    if seq and bundle:
+        return "mixed", seq, bundle
+    if bundle:
+        return "form2", seq, bundle
+    if seq:
+        return "form1", seq, bundle
+    return "empty", seq, bundle
+
 
 def _check_gain_compensation(bag: Bag, doc: Document, m: StudyModel) -> None:
     """Blocco top-level opzionale ``gain_compensation:`` (granstudies
@@ -798,12 +851,17 @@ def _check_spread(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
     if n_decl is not None:
         counts.add(n_decl)
 
-    # gli expr non possiedono il conteggio: si valutano con la n risolta
-    if expr_entries:
-        n_eff = n_decl if n_decl is not None else (
-            next(iter(counts)) if len(counts) == 1 else 2)
-        for oe in expr_entries:
-            _check_spread_expr(bag, doc, m, spath, oe, n_eff)
+    # n risolta (per la valutazione delle expr, che non possiedono il conteggio)
+    n_eff = n_decl if n_decl is not None else (
+        next(iter(counts)) if len(counts) == 1 else 2)
+    # manopole in scope (documento/gruppo/voce): entrano nella valutazione delle
+    # expr come nomi risolti (scalare neutro), cosi' un riferimento non e' ignoto
+    extra = _spread_scope_names(doc, spath, spread)
+    for oe in expr_entries:
+        _check_spread_expr(bag, doc, m, spath, oe, n_eff, extra)
+
+    # manopole di voce (spread.let): solo expr/banda; valutazione con i/n
+    _check_spread_let(bag, doc, m, spath, spread, n_eff, extra)
 
     if len(counts) > 1:
         det = ", ".join(f"{p}: {c}" for p, c in owned)
@@ -870,8 +928,62 @@ def _check_spread_n(bag: Bag, spath: KeyPath, raw_n: Any) -> Optional[int]:
 _LET_BAND_KEYS = frozenset({"base", "range", "seed", "distribution", "drift"})
 
 
+def _spread_scope_names(doc: Document, spath: KeyPath, spread: Any) -> Dict[str, Any]:
+    """Le manopole ``let:`` in scope per le expr di uno spread — documento,
+    gruppo (se lo spread e' di uno stream) e voce (``spread.let``) — legate a
+    uno scalare neutro: servono solo a risolvere i nomi, non a tipizzare."""
+    names: Dict[str, Any] = {}
+    dl = doc.get(("let",))
+    if isinstance(dl, dict):
+        names.update({k: 1.0 for k in dl})
+    if spath and spath[0] == "streams" and len(spath) >= 2:
+        gl = doc.get(("streams", spath[1], "let"))
+        if isinstance(gl, dict):
+            names.update({k: 1.0 for k in gl})
+    vl = spread.get("let") if isinstance(spread, dict) else None
+    if isinstance(vl, dict):
+        names.update({k: 1.0 for k in vl})
+    return names
+
+
+def _check_spread_let(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
+                      spread: Any, n_eff: int, extra: Dict[str, Any]) -> None:
+    """Manopole di voce ``spread.let``: solo ``expr`` (con ``i``/``n``) e banda
+    (``base``); ``values``/``ramp`` sono errore (conteggio ridondante con
+    ``over``). Le expr si valutano con ``i``/``n`` e le manopole in scope."""
+    voice = spread.get("let") if isinstance(spread, dict) else None
+    if not isinstance(voice, dict):
+        return
+    for var, node in voice.items():
+        kp = spath + ("let", var)
+        if not isinstance(node, dict):
+            continue  # scalare/envelope disegnato costante per voce: ammesso
+        bad = [mk for mk in ("values", "ramp") if mk in node]
+        if bad:
+            bag.add(kp,
+                    f"spread.let['{var}']: {sorted(bad)} non ammesso — in "
+                    "spread.let solo 'expr' (con i/n) e banda ('base'); il "
+                    "conteggio e' dello spread (sarebbe ridondante con 'over').",
+                    code="spread-let-form")
+            continue
+        if "base" in node:
+            _check_band(bag, doc, kp, node, f"spread.let['{var}']")
+            continue
+        if exprlang.is_expr_node(node):
+            try:
+                text, let = exprlang.parse_expr_node(node)
+            except ValueError as e:
+                bag.add(kp, str(e), code="expr", prefer_value=True)
+                continue
+            scope = {**extra, **let, "i": 0, "n": n_eff}
+            try:
+                exprlang.eval_expr(text, scope)
+            except ValueError as e:
+                bag.add(kp + ("expr",), str(e), code="expr", prefer_value=True)
+
+
 def _check_spread_expr(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
-                       oe, n_eff: int) -> None:
+                       oe, n_eff: int, extra: Optional[Dict[str, Any]] = None) -> None:
     """Valida la strategy expr di uno spread come il runtime: estrae le
     bande-let (pescaggi random per-stream) prima del parse, poi valuta
     l'espressione con ``i``/``n`` iniettati."""
@@ -902,7 +1014,8 @@ def _check_spread_expr(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
                 "conteggio degli stream generati) — ridefinirli in 'let' e' errore.",
                 code="expr-reserved")
         return
-    scope: Dict[str, Any] = dict(static_let)
+    scope: Dict[str, Any] = dict(extra or {})
+    scope.update(static_let)
     for var in rand_let:
         scope[var] = 1.0  # un pescaggio-banda vale uno scalare, ai fini del check
     scope["i"] = 0
@@ -1163,6 +1276,13 @@ def _check_unknown_keys(bag: Bag, doc: Document, m: StudyModel) -> None:
         value = doc.get(entry.path)
         if not isinstance(value, dict):
             continue
+        # asse ``versions:`` a Forma 1 (manopole co-varianti) / Forma 2 (stati):
+        # le sotto-chiavi sono nomi liberi, non le chiavi di un generatore Env,
+        # quindi non vanno trattate come chiavi sconosciute del contesto env.
+        if (len(entry.path) == 2 and entry.path[0] == "versions"
+                and entry.path[1] not in VERSIONS_RESERVED
+                and not any(mk in value for mk in GEN_MARKERS)):
+            continue
         # figli diretti di axes:/stack: negli override: nomi d'asse letterali,
         # ma una chiave puntata (es. 'density.baseline') segue il boundary del
         # nome d'asse — qui si intercetta solo l'ambiguita'
@@ -1195,7 +1315,149 @@ def _check_unknown_keys(bag: Bag, doc: Document, m: StudyModel) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Manopole ``let:`` a tre livelli (documento / gruppo / voce)
+
+# Segnaposti con cui una manopola entra nello scope di una expr: un envelope
+# (banda/ramp/values/envelope disegnato) come Env, cosi' l'aritmetica
+# Env⊙Env resta un errore; scalari e nodi-expr derivati come scalare neutro.
+_ENV_PLACEHOLDER = [[0.0, 1.0], [1.0, 1.0]]
+_ENV_FORM_MARKERS = ("base", "range", "values", "ramp", "points")
+
+
+def _knob_binding(val: Any) -> Any:
+    """Il valore-segnaposto con cui una manopola di ``let:`` entra in una expr."""
+    if isinstance(val, list):
+        return _ENV_PLACEHOLDER            # envelope disegnato o [a, b]
+    if isinstance(val, dict):
+        if exprlang.is_expr_node(val):
+            return 1.0                     # nodo-expr derivato: scalare, ai fini del check
+        if any(mk in val for mk in _ENV_FORM_MARKERS):
+            return _ENV_PLACEHOLDER        # banda/ramp/values -> Env
+    return 1.0
+
+
+def _iter_expr_texts(data: Any):
+    """Tutti i testi di espressione del documento: forma annidata
+    (``{expr: "..."}``) e forma puntata (chiave che finisce in ``.expr``)."""
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if k == "expr" and isinstance(v, str):
+                yield v
+            elif isinstance(k, str) and k.endswith(".expr") and isinstance(v, str):
+                yield v
+            else:
+                yield from _iter_expr_texts(v)
+    elif isinstance(data, list):
+        for x in data:
+            yield from _iter_expr_texts(x)
+
+
+def _referenced_names(doc: Document) -> set:
+    """L'unione dei nomi referenziati da qualunque espressione del documento
+    (i candidati a manopole effettivamente usate)."""
+    names: set = set()
+    for text in _iter_expr_texts(doc.data):
+        names |= exprlang.names_in(text)
+    return names
+
+
+def _let_names(node: Any) -> List[str]:
+    return [k for k in node] if isinstance(node, dict) else []
+
+
+def _check_let_blocks(bag: Bag, doc: Document, m: StudyModel) -> None:
+    """Manopole ``let:`` di documento / gruppo / voce: ombreggiamento fra i
+    livelli, collisione con le variabili di ``versions:`` e manopole non
+    referenziate. Lo *schema* dei valori (nomi liberi, Env ricorsivo) e la
+    valutazione delle expr derivate passano da schema/``_check_expr_nodes``."""
+    data = doc.data
+    if not isinstance(data, dict):
+        return
+    used = _referenced_names(doc)
+
+    doc_let = data.get("let")
+    doc_names = set(_let_names(doc_let))
+    if isinstance(doc_let, dict):
+        for var in doc_let:
+            if var not in used:
+                _unreferenced(bag, ("let", var), var, "documento")
+
+    versions = data.get("versions")
+    versions_vars = {
+        k for k in versions if k not in VERSIONS_RESERVED
+    } if isinstance(versions, dict) else set()
+
+    streams = data.get("streams")
+    if not isinstance(streams, dict):
+        return
+    for sname, scfg in streams.items():
+        if not isinstance(scfg, dict):
+            continue
+        group_let = scfg.get("let")
+        group_names = set(_let_names(group_let))
+        gpath: KeyPath = ("streams", sname, "let")
+        if isinstance(group_let, dict):
+            for var in group_let:
+                if var in doc_names:
+                    _shadow(bag, gpath + (var,), var, "documento")
+                elif var not in used:
+                    _unreferenced(bag, gpath + (var,), var, f"gruppo '{sname}'")
+
+        spread = scfg.get("spread")
+        voice_let = spread.get("let") if isinstance(spread, dict) else None
+        vpath: KeyPath = ("streams", sname, "spread", "let")
+        if isinstance(voice_let, dict):
+            for var in voice_let:
+                if var in group_names:
+                    _shadow(bag, vpath + (var,), var, f"gruppo '{sname}'")
+                elif var in doc_names:
+                    _shadow(bag, vpath + (var,), var, "documento")
+                elif var in versions_vars:
+                    bag.add(vpath + (var,),
+                            f"spread.let: la manopola '{var}' e' omonima di una "
+                            "variabile di 'versions:' — collisione fra assi "
+                            "ortogonali e manopole di voce.",
+                            code="let-versions-collision")
+                elif var not in used:
+                    _unreferenced(bag, vpath + (var,), var,
+                                  f"spread.let di '{sname}'")
+
+
+def _shadow(bag: Bag, path: KeyPath, var: str, ancestor: str) -> None:
+    bag.add(path,
+            f"let: la manopola '{var}' ridichiara un nome gia' in scope nel "
+            f"livello superiore ({ancestor}) della sua linea — l'ombreggiamento "
+            "fra livelli e' vietato (due gruppi fratelli possono invece "
+            "condividere un nome).",
+            code="let-shadow")
+
+
+def _unreferenced(bag: Bag, path: KeyPath, var: str, where: str) -> None:
+    bag.add(path,
+            f"let: la manopola '{var}' ({where}) non e' referenziata da nessuna "
+            "espressione — una manopola non usata e' inerte (come una variabile "
+            "di 'versions:' non referenziata).",
+            code="let-unreferenced")
+
+
+# ---------------------------------------------------------------------------
 # Nodi-expr: stessa diagnostica del runtime
+
+
+def _ancestor_knob_bindings(doc: Document, path: KeyPath) -> Dict[str, Any]:
+    """Le manopole di ``let:`` in scope per una expr a ``path``: quelle di
+    documento piu', se la expr vive dentro uno stream, quelle di gruppo."""
+    bindings: Dict[str, Any] = {}
+    doc_let = doc.get(("let",))
+    if isinstance(doc_let, dict):
+        for name, val in doc_let.items():
+            bindings[name] = _knob_binding(val)
+    if len(path) >= 2 and path[0] == "streams":
+        group_let = doc.get(("streams", path[1], "let"))
+        if isinstance(group_let, dict):
+            for name, val in group_let.items():
+                bindings[name] = _knob_binding(val)
+    return bindings
 
 
 def _check_expr_nodes(bag: Bag, doc: Document, m: StudyModel) -> None:
@@ -1229,7 +1491,11 @@ def _check_expr_nodes(bag: Bag, doc: Document, m: StudyModel) -> None:
         except ValueError as e:
             bag.add(p, str(e), code="expr", prefer_value=False)
             continue
+        # le manopole di documento/gruppo in scope entrano nella valutazione,
+        # cosi' un riferimento a una manopola di ``let:`` non e' un 'nome ignoto'
+        # (il ``let`` locale del nodo le ombreggia).
+        scope = {**_ancestor_knob_bindings(doc, p), **let}
         try:
-            exprlang.eval_expr(text, dict(let))
+            exprlang.eval_expr(text, scope)
         except ValueError as e:
             bag.add(p + ("expr",), str(e), code="expr", prefer_value=True)

@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from glls.exprlang import eval_expr, parse_expr_node
+from glls.exprlang import eval_expr, names_in, parse_expr_node
 
 
 ENV = [[0, 0], [1, 10]]
@@ -285,3 +285,20 @@ def test_nested_expr_result_does_not_alias_scope():
     assert out == env
     out[0][1] = 99
     assert env[0][1] == 1
+
+
+def test_names_in_collects_knob_references():
+    assert names_in("gain - 1") == {"gain"}
+    assert names_in("a * b + c") == {"a", "b", "c"}
+
+
+def test_names_in_excludes_functions_and_constants():
+    # funzioni primitive e costanti non sono manopole
+    assert names_in("floor(k / 2)") == {"k"}
+    assert names_in("min(a, pi)") == {"a"}
+    assert names_in("mix(a, b, w)") == {"a", "b", "w"}
+
+
+def test_names_in_tolerant_on_garbage():
+    assert names_in("1 +") == set()
+    assert names_in(42) == set()

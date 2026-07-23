@@ -131,3 +131,41 @@ def test_percorso_is_open_context():
 def test_percorso_is_root_key():
     root_names = {k.name for k in schema.keys_for("root")}
     assert "percorso" in root_names
+
+
+# --- let: manopole a tre livelli (documento / gruppo / voce, issue #21) ---
+
+def test_let_document_block_context():
+    assert schema.context_for_path(("let",)) == "let"
+    # il valore di una manopola riapre un contesto Env ricorsivo
+    assert schema.context_for_path(("let", "gain")) == "env"
+    assert schema.context_for_path(("let", "gain", "ramp")) == "ramp"
+
+
+def test_let_group_block_context():
+    # let: di gruppo (entry di streams), raggiunto per ricorsione dell'override
+    assert schema.context_for_path(("streams", "s", "let")) == "let"
+    assert schema.context_for_path(("streams", "s", "let", "k")) == "env"
+    assert schema.context_for_path(("streams", "s", "let", "k", "base")) == "env"
+
+
+def test_let_spread_voice_block_context():
+    assert schema.context_for_path(("streams", "s", "spread", "let")) == "let"
+    assert schema.context_for_path(("streams", "s", "spread", "let", "v")) == "env"
+
+
+def test_let_is_open_context():
+    # nomi di manopola liberi
+    assert "let" not in schema.CLOSED_CONTEXTS
+
+
+def test_let_is_root_key():
+    assert "let" in {k.name for k in schema.keys_for("root")}
+
+
+def test_let_is_stream_override_key():
+    assert "let" in {k.name for k in schema.keys_for("stream_override")}
+
+
+def test_let_is_spread_key():
+    assert "let" in {k.name for k in schema.keys_for("spread")}
