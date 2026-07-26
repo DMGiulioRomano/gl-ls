@@ -174,6 +174,41 @@ def _check_bounds_value(
                 code="out-of-bounds", prefer_value=True)
 
 
+def _is_structural_slot_path(p: KeyPath) -> bool:
+    """``axes.<asse>.baseline`` o ``axes.<asse>.values[i]``."""
+    if len(p) < 3 or p[0] != "axes" or p[1] in AXES_RESERVED:
+        return False
+    if len(p) == 3:
+        return p[2] == "baseline"
+    return len(p) == 4 and p[2] == "values" and isinstance(p[3], int)
+
+
+def _check_structural_slot(
+    bag: Bag, path: KeyPath, v: Any, label: str, slot: str,
+    disp: Optional[str] = None,
+) -> None:
+    """``baseline`` e ogni elemento di ``values`` sono slot *strutturali*: il
+    baseline di riposo e i valori che si enumerano. Il runtime li vuole numeri
+    e alza ``SpecError`` su qualunque altra cosa — nodo-expr, stringa, lista
+    (``study_spec``, granstudies#37); senza questa guardia gl-ls li lasciava
+    passare muto (``_check_bounds_value`` esce sul non-numero, ed e' giusto:
+    quello e' un controllo di bounds).
+
+    La distinzione da tenere ferma e' con gli Env: ``base``/``range`` di una
+    banda *sono* ambienti e un ``expr:`` li' e' legittimo — qui no. E' il primo
+    posto dove chi «pensa per manopole» (``let:``) prova a mettere un ``expr:``
+    e non vale."""
+    if _num(v) is not None:
+        return
+    cosa = "un nodo-expr" if isinstance(v, dict) else "un non-numero"
+    bag.add(path,
+            f"{label}: '{disp or slot}' contiene {cosa} ({v!r}), non ammesso "
+            f"qui — '{slot}' vuole un numero: e' uno slot strutturale "
+            "(conta/enumera i valori), non un ambiente 'expr:'/'let:' come "
+            "'base'/'range' di una banda.",
+            code="structural-slot", prefer_value=True)
+
+
 def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
     axes = doc.get(("axes",))
     if not isinstance(axes, dict):
@@ -271,6 +306,17 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
             _check_ramp(bag, apath + ("ramp",), cfg.get("ramp"), f"Asse '{name}'",
                         require_stop=True)
 
+        # slot strutturali: valgono a prescindere dal path engine risolto
+        # (il runtime li controlla prima del confronto bounds)
+        if "baseline" in cfg:
+            _check_structural_slot(bag, apath + ("baseline",), cfg.get("baseline"),
+                                   f"Asse '{name}'", "baseline")
+        vals = cfg.get("values")
+        if isinstance(vals, list):
+            for i, v in enumerate(vals):
+                _check_structural_slot(bag, apath + ("values", i), v,
+                                       f"Asse '{name}'", "values", f"values[{i}]")
+
         # bounds su baseline e values espliciti; i valori di un asse atterrano
         # nel base root, quindi vale la sua duration_unit. Il path engine e'
         # quello risolto: 'path' esplicito o, se assente, la chiave dell'asse
@@ -289,7 +335,6 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
                         "e' obbligatorio.",
                         code="baseline-required",
                         data={"fix": {"kind": "add-baseline", "path": list(apath)}})
-            vals = cfg.get("values")
             if isinstance(vals, list):
                 for i, v in enumerate(vals):
                     _check_bounds_value(bag, apath + ("values", i), engine_path, v,
@@ -676,9 +721,11 @@ def _check_gain_compensation(bag: Bag, doc: Document, m: StudyModel) -> None:
     """Blocco top-level opzionale ``gain_compensation:`` (granstudies
     ``gainmap.parse_config``). Due sole chiavi: ``alpha`` in ``[0, 1]`` e
     ``max_shift`` ``> 0`` (dB) — i bound che il runtime da' solo al parse. La
-    compensazione vale solo sui documenti multi-stream (``stack:``/``versions:``):
-    altrove il blocco e' inerte (hint informativo). Le chiavi estranee (es. un
-    refuso ``alfa:``) le intercetta ``_check_unknown_keys`` sul contesto chiuso."""
+    compensazione vale solo sui documenti multi-stream — ``stack:``,
+    ``versions:`` e ``percorso:`` (granstudies#36: e' proprio il percorso, che
+    di stack ne mette molti nel tempo, il caso d'uso principale) — altrove il
+    blocco e' inerte (hint informativo). Le chiavi estranee (es. un refuso
+    ``alfa:``) le intercetta ``_check_unknown_keys`` sul contesto chiuso."""
     gpath: KeyPath = ("gain_compensation",)
     gc = doc.get(gpath)
     if gc is None:
@@ -703,12 +750,15 @@ def _check_gain_compensation(bag: Bag, doc: Document, m: StudyModel) -> None:
                     "gain_compensation.max_shift deve essere un numero > 0 "
                     "(tetto in dB alla correzione del singolo stream).",
                     code="gain-compensation-max-shift", prefer_value=True)
-    if not m.has_stack and doc.get(("versions",)) is None:
+    multistream = (m.has_stack
+                   or doc.get(("versions",)) is not None
+                   or doc.get(("percorso",)) is not None)
+    if not multistream:
         bag.add(gpath,
-                "gain_compensation e' dichiarato ma lo studio non ha 'stack:' "
-                "ne' 'versions:': senza documenti multi-stream la compensazione "
-                "e' inerte (la correzione e' relativa, uno stream da solo non "
-                "maschera nessuno).",
+                "gain_compensation e' dichiarato ma lo studio non ha 'stack:', "
+                "'versions:' ne' 'percorso:': senza documenti multi-stream la "
+                "compensazione e' inerte (la correzione e' relativa, uno stream "
+                "da solo non maschera nessuno).",
                 types.DiagnosticSeverity.Hint, code="gain-compensation-inert")
 
 
@@ -1471,6 +1521,12 @@ def _check_expr_nodes(bag: Bag, doc: Document, m: StudyModel) -> None:
         if len(p) >= 3 and p[0] == "streams" and p[2] == "spread":
             continue
         if p and p[0] == "spread":
+            continue
+        # slot strutturali di un asse (baseline, values[i]): un nodo-expr li'
+        # non e' ammesso *a prescindere* dal fatto che l'espressione regga —
+        # lo dice _check_structural_slot, e validarla qui aggiungerebbe solo
+        # rumore sopra il messaggio che conta.
+        if _is_structural_slot_path(p):
             continue
         # un nodo-expr annidato dentro il 'let' di un altro nodo-expr non e'
         # standalone: lo valida (parse ricorsivo) e lo risolve (lazy, con i

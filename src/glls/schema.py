@@ -319,14 +319,20 @@ _ROOT_KEYS = [
                             "per stream, cosi' stream che granulano lo stesso "
                             "sample in punti di lettura diversi arrivano al mix "
                             "appaiati invece di mascherarsi. Vale **solo** sui "
-                            "documenti multi-stream (`stack:`/`versions:`); su "
-                            "uno studio senza di essi e' inerte (la correzione e' "
-                            "relativa: uno stream da solo non maschera nessuno). "
+                            "documenti multi-stream (`stack:`, `versions:`, "
+                            "`percorso:`); su uno studio senza di essi e' inerte "
+                            "(la correzione e' relativa: uno stream da solo non "
+                            "maschera nessuno). Su `percorso:` il riferimento "
+                            "resta **locale** — la media degli stream "
+                            "contemporanei, per istanza, sulla sovrapposizione "
+                            "`[onset, onset+duration)` — con una traslazione in "
+                            "sottrazione **unica** per l'intero percorso. "
                             "Due sole chiavi: `alpha` e `max_shift`.",
        kind="keyword", snippet="gain_compensation:\n  alpha: ${1:0.7}"),
     _k("percorso", "**Blocco top-level** (batteria di studi lungo un percorso): "
                    "come gli altri processi multi-documento genera piu' "
-                   "stream/file.", kind="keyword"),
+                   "stream/file, e come gli altri accetta `gain_compensation:`.",
+       kind="keyword"),
     _k("let", _LET_DOC_DOCUMENT, kind="keyword",
        snippet="let:\n  ${1:manopola}: ${2:valore}"),
 ]
@@ -347,7 +353,11 @@ _AXIS_KEYS = [
                "dal path reale).",
        values=EI.AXIS_PATHS),
     _k("baseline", "Valore a riposo dell'asse; obbligatorio se l'engine non ha "
-                   "default per il path (density, pitch.*, loop_*)."),
+                   "default per il path (density, pitch.*, loop_*). **Slot "
+                   "strutturale**: vuole un numero — al pari degli elementi di "
+                   "`values`, che enumerano. Non e' un Env come `base`/`range` "
+                   "di una banda: un nodo-expr `{expr, let}` qui non e' "
+                   "ammesso."),
     _k("interpolation", "Override per-asse della curva Y: linear | cubic | step. "
                         "`step` = tiene-e-salta (collasso durata solo se TUTTI "
                         "gli assi sono step).", values=EI.INTERPOLATIONS),

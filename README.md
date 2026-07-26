@@ -20,6 +20,9 @@ Language server (LSP) per il **linguaggio di granulazione** degli
   camminata-X con Y che enumera);
 - bounds engine su `baseline`, `values` e sugli envelope di `base.*`
   (density [0.01, 4000], volume [-120, 12], ...);
+- **slot strutturali**: `baseline` e gli elementi di `values` vogliono numeri —
+  un nodo-expr, una stringa o una lista li' e' errore (a differenza di
+  `base`/`range` di una banda, che sono Env e un `expr:` lo accettano);
 - unit della camminata (`hz | s | bpm`), chiavi non ammesse nel walk,
   migrazione dei wrapper deprecati `rand:`/`cps:` (con quick fix);
 - coerenza dei conteggi in `spread` (n dichiarato vs posseduti);
