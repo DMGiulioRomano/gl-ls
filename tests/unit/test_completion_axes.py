@@ -62,6 +62,8 @@ def test_gain_compensation_block_hover_documented():
     h = hover.hover(doc, m, 0, 3)
     assert h is not None and "gain_compensation" in h.contents.value
     assert "multi-stream" in h.contents.value
+    # i processi elencati sono tre: il percorso compreso (issue #23)
+    assert "percorso" in h.contents.value
 
 
 def test_gain_compensation_alpha_hover_documented():

@@ -488,7 +488,7 @@ def test_gain_compensation_typo_key_flagged():
 
 def test_gain_compensation_inert_without_multistream():
     from lsprotocol import types
-    # senza stack: ne' versions: il blocco e' inerte -> hint
+    # senza stack:, versions: ne' percorso: il blocco e' inerte -> hint
     text = BASE + "gain_compensation:\n  alpha: 0.7\n"
     ds = diags_of(text)
     inert = [d for d in ds if d.code == "gain-compensation-inert"]
@@ -507,6 +507,20 @@ def test_gain_compensation_not_inert_with_stack():
     assert "gain-compensation-inert" not in codes(text)
 
 
+def test_gain_compensation_not_inert_with_percorso():
+    # granstudies#36: la compensazione e' attiva anche sul quarto processo, ed
+    # e' li' che serve di piu' (il percorso mette molti stack nel tempo)
+    text = (BASE + "percorso:\n  k: 3\n"
+            "gain_compensation:\n  alpha: 0.7\n")
+    assert "gain-compensation-inert" not in codes(text)
+
+
+def test_gain_compensation_inert_message_names_percorso():
+    text = BASE + "gain_compensation:\n  alpha: 0.7\n"
+    inert = [d for d in diags_of(text) if d.code == "gain-compensation-inert"]
+    assert inert and "percorso" in inert[0].message
+
+
 # --- percorso: blocco top-level riconosciuto (issue #19, nota a margine) --
 
 def test_percorso_not_flagged_unknown_key():
@@ -514,6 +528,73 @@ def test_percorso_not_flagged_unknown_key():
     ds = diags_of(text)
     # ne' 'percorso' ne' i suoi figli producono unknown-key
     assert not any(d.code == "unknown-key" for d in ds)
+
+
+# --- slot strutturali: baseline / values[i] vogliono numeri (issue #23) ---
+#
+# Specchio di study_spec.py in granstudies (issue #37): un nodo-expr, una
+# stringa o una lista in questi due slot e' SpecError al parse. Prima gl-ls
+# li lasciava passare muti, perche' _check_bounds_value esce sul non-numero.
+
+def _axes(baseline="20", values="[10, 30]"):
+    return (BASE.replace("    baseline: 20\n", f"    baseline: {baseline}\n")
+                .replace("    values: [10, 30]\n", f"    values: {values}\n"))
+
+
+def test_baseline_expr_node_flagged():
+    ds = [d for d in diags_of(_axes(baseline='{expr: "10"}'))
+          if d.code == "structural-slot"]
+    assert len(ds) == 1
+    assert "nodo-expr" in ds[0].message and "baseline" in ds[0].message
+
+
+def test_values_expr_node_flagged_on_the_element():
+    ds = [d for d in diags_of(_axes(values='[1, {expr: "2"}, 3]'))
+          if d.code == "structural-slot"]
+    assert len(ds) == 1
+    assert "values[1]" in ds[0].message
+    # ancorata all'elemento, non all'intera lista
+    assert ds[0].range.start.character > 0
+
+
+def test_baseline_string_flagged():
+    ds = [d for d in diags_of(_axes(baseline="dieci"))
+          if d.code == "structural-slot"]
+    assert len(ds) == 1
+    assert "non-numero" in ds[0].message
+
+
+def test_values_nested_list_flagged():
+    ds = [d for d in diags_of(_axes(values="[1, [2], 3]"))
+          if d.code == "structural-slot"]
+    assert len(ds) == 1
+    assert "non-numero" in ds[0].message
+
+
+def test_baseline_bool_flagged():
+    # come nel runtime, un bool non e' un numero
+    ds = [d for d in diags_of(_axes(baseline="true"))
+          if d.code == "structural-slot"]
+    assert len(ds) == 1
+
+
+def test_numeric_baseline_and_values_clean():
+    assert "structural-slot" not in codes(_axes(baseline="-2.5", values="[1, 2.5]"))
+
+
+def test_band_env_expr_still_allowed():
+    # la distinzione che conta: base/range di una banda SONO Env, un expr li'
+    # e' legittimo e non deve finire nella nuova diagnostica
+    text = BASE.replace("    values: [10, 30]\n",
+                        '    base: {expr: "5 * 2"}\n    range: 4\n    n: 3\n')
+    assert "structural-slot" not in codes(text)
+
+
+def test_structural_slot_suppresses_duplicate_expr_diag():
+    # una expr rotta in baseline da' un solo messaggio: quello che conta e'
+    # che un nodo-expr li' non e' ammesso, non che il nome sia ignoto
+    ds = diags_of(_axes(baseline='{expr: "nome_ignoto * 2"}'))
+    assert [d.code for d in ds] == ["structural-slot"]
 
 
 def test_syntax_error_single_diag():
