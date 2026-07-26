@@ -154,7 +154,9 @@ _ENGINE_STREAM_KEYS = [
     _k("fill_factor", "density = fill_factor / grain.duration. Bounds [0.001, 50]."),
     _k("distribution", "Modello Truax: 0 = sincrono, 1 = asincrono; blend lineare. "
                        "Scalare o envelope."),
-    _k("volume", "dB (default 0). Bounds [-120, 12]. Scalare o envelope."),
+    _k("volume", f"dB (default 0). Bounds [-120, {EI.VOLUME_MAX_DB:g}]. "
+                 "Scalare o envelope. Sopra 0 dBFS il renderer non normalizza: "
+                 "il range positivo e' clipping reale, non headroom."),
     _k("volume_range", "±dB randomizzazione per grano."),
     _k("pan", "Gradi: 0 centro, ±180 estremi. Bounds [-3600, 3600]."),
     _k("pan_range", "±gradi randomizzazione per grano."),

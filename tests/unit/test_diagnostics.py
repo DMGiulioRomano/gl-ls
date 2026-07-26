@@ -240,6 +240,17 @@ def test_engine_envelope_bounds():
     assert "out-of-bounds" in codes(text)
 
 
+def test_volume_positive_range_up_to_24_is_legal():
+    # granstudies alza il tetto di volume a VOLUME_MAX_DB (24 dB): +18 e' legale
+    text = BASE.replace("base:\n", "base:\n  volume: 18\n")
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_volume_above_max_still_flagged():
+    text = BASE.replace("base:\n", "base:\n  volume: 30\n")
+    assert "out-of-bounds" in codes(text)
+
+
 def test_grain_duration_samples_scalar_not_flagged():
     # 512 campioni ~ 10.7 ms: letti come secondi sarebbero > 10 (falso positivo)
     text = BASE.replace(

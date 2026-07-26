@@ -12,6 +12,16 @@ from typing import Dict, Optional, Tuple
 
 OUTPUT_SR = 48000
 
+# Tetto di ``volume``. Non e' un dato fisso dell'engine: e' una costante di
+# *studio*. granulation-studies (``granstudies/engine_bridge.py``, costante
+# ``VOLUME_MAX_DB``) rimpiazza a runtime ``GRANULAR_PARAMETERS["volume"]`` con
+# un ``dataclasses.replace`` quando inserisce ``engine/src`` in ``sys.path``,
+# e il registry viene riletto a ogni ``get_parameter_definition``: il tetto
+# vale quindi per parser, ``pge.api`` e ``granstudies/bounds.py``. Puo'
+# cambiare di nuovo — quando succede, si cambia qui (unico punto: la doc
+# hover di ``schema.py`` interpola questa costante).
+VOLUME_MAX_DB = 24.0
+
 
 @dataclass(frozen=True)
 class ParamInfo:
@@ -38,7 +48,9 @@ PARAMS: Dict[str, ParamInfo] = {
         "campioni a 48000 Hz)."),
     "grain.duration_range": ParamInfo(0, 10, None, "±s",
         "Randomizzazione ± della durata per grano."),
-    "volume": ParamInfo(-120, 12, 0.0, "dB", "Volume dello stream."),
+    "volume": ParamInfo(-120, VOLUME_MAX_DB, 0.0, "dB",
+        "Volume dello stream. Sopra 0 dBFS il renderer non normalizza: il "
+        "range positivo e' clipping reale, non headroom."),
     "volume_range": ParamInfo(0, 132, None, "±dB", "Randomizzazione ± per grano."),
     "pan": ParamInfo(-3600, 3600, 0.0, "gradi", "0 = centro, ±180 = estremi."),
     "pan_range": ParamInfo(0, 7200, None, "±gradi", "Randomizzazione ± per grano."),
