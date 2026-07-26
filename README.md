@@ -19,7 +19,7 @@ Language server (LSP) per il **linguaggio di granulazione** degli
 - **n-ownership** nelle due direzioni (banda senza `n` senza camminata-X;
   camminata-X con Y che enumera);
 - bounds engine su `baseline`, `values` e sugli envelope di `base.*`
-  (density [0.01, 4000], volume [-120, 12], ...);
+  (density [0.01, 4000], volume [-120, 24], ...);
 - **slot strutturali**: `baseline` e gli elementi di `values` vogliono numeri —
   un nodo-expr, una stringa o una lista li' e' errore (a differenza di
   `base`/`range` di una banda, che sono Env e un `expr:` lo accettano);
