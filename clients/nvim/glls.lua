@@ -60,8 +60,15 @@ end
 --   vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action)  -- i ricalcoli
 --   vim.keymap.set("n", "K", vim.lsp.buf.hover)
 
--- Semantic token: funzionano senza config. streams (namespace) e spread
--- (decorator) prendono gia' colori distinti dai default di Neovim. Le sezioni
--- axes/stack/base (struct) invece ricadono su Type, lo stesso dei nomi d'asse.
--- Scommenta per distinguerle (adatta il colore al tuo colorscheme):
---   vim.api.nvim_set_hl(0, "@lsp.type.struct.yaml", { link = "Special" })
+-- Semantic token: funzionano senza config, ma due gruppi non hanno un
+-- default in Neovim e resterebbero bianchi. Li leghiamo a gruppi standard
+-- (niente colori fissi: seguono il colorscheme), e li rileghiamo a ogni
+-- cambio di colorscheme, che azzera gli highlight.
+--   struct   -> axes / axis / stack, ovunque compaiano
+--   modifier -> blocchi let, a ogni livello
+local function glls_hl()
+  vim.api.nvim_set_hl(0, "@lsp.type.struct.yaml", { link = "Special" })
+  vim.api.nvim_set_hl(0, "@lsp.type.modifier.yaml", { link = "Constant" })
+end
+glls_hl()
+vim.api.nvim_create_autocmd("ColorScheme", { callback = glls_hl })
