@@ -209,6 +209,60 @@ def _check_structural_slot(
             code="structural-slot", prefer_value=True)
 
 
+def _axis_write_paths(cfg: Dict[str, Any], spread: Any) -> set:
+    """I path — relativi a ``axes.`` — che una entry di ``streams:`` scrive.
+
+    Tre sorgenti, tutte fuse dal runtime prima della validazione: il mapping
+    ``axes:`` dell'override (chiavi anche puntate, ``grain.duration``), le
+    chiavi puntate scritte al primo livello della entry (``axes.density.base``)
+    e i path di ``spread.over`` (dove un cugino puo' portare il generatore che
+    il gruppo non dichiara)."""
+    out: set = set()
+
+    def walk(prefix: str, node: Any) -> None:
+        if prefix:
+            out.add(prefix)
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if isinstance(k, str):
+                    walk(f"{prefix}.{k}" if prefix else k, v)
+
+    for k, v in cfg.items():
+        if isinstance(k, str) and k.startswith("axes.") and len(k) > len("axes."):
+            walk(k[len("axes."):], v)
+    nested = cfg.get("axes")
+    if isinstance(nested, dict):
+        walk("", nested)
+    if isinstance(spread, dict):
+        for oe in expand_over_items(over_items(spread)).values():
+            if isinstance(oe.path, str) and oe.path.startswith("axes."):
+                out.add(oe.path[len("axes."):])
+    return out
+
+
+def _generator_from_streams(doc: Document, m: StudyModel, axis: str) -> bool:
+    """True se il generatore Y dell'asse arriva dagli stream invece che dal
+    documento base.
+
+    Il documento top-level puo' restare scarno (solo ``baseline``) e ogni
+    gruppo di ``streams:`` dichiarare la propria forma: il runtime valida il
+    documento *merged* per stream (``resolve_streams``), non quello base. Vale
+    solo se OGNI entry porta il generatore — se una lo lascia scoperto, quello
+    stream fallisce davvero, e l'errore resta."""
+    if not m.streams:
+        return False
+    global_spread = doc.get(("spread",))
+    for info in m.streams.values():
+        cfg = info.cfg if isinstance(info.cfg, dict) else {}
+        spread = (_merged_spread(global_spread, cfg.get("spread"))
+                  if "spread" in cfg else None)
+        paths = _axis_write_paths(cfg, spread)
+        if not any(p == f"{axis}.{mk}" or p.startswith(f"{axis}.{mk}.")
+                   for mk in GEN_MARKERS for p in paths):
+            return False
+    return True
+
+
 def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
     axes = doc.get(("axes",))
     if not isinstance(axes, dict):
@@ -279,7 +333,7 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
                         code="multi-generator",
                         data={"fix": {"kind": "remove-key",
                                       "path": list(apath + (extra_marker,))}})
-        elif not markers:
+        elif not markers and not _generator_from_streams(doc, m, name):
             bag.add(apath,
                     f"Asse '{name}' senza valori di test: dichiara 'values', 'ramp' "
                     "o una banda ('base'/'range'/'n').",
