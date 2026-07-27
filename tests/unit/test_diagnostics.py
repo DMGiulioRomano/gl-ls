@@ -38,6 +38,49 @@ def test_axis_without_generator():
     assert "no-generator" in codes(text)
 
 
+def test_axis_generator_from_group():
+    # documento base scarno (solo baseline), forma dichiarata nel gruppo: il
+    # runtime valida il merged per stream, non il documento base
+    text = BASE.replace("    values: [10, 30]\n", "") + """streams:
+  a:
+    axes:
+      density:
+        base: 20
+        range: 5
+        n: 4
+"""
+    assert "no-generator" not in codes(text)
+
+
+def test_axis_generator_from_spread_over():
+    # il generatore puo' arrivare da spread.over (un valore per cugino)
+    text = BASE.replace("    values: [10, 30]\n", "") + """streams:
+  fan:
+    axes:
+      density:
+        range: 5
+        n: 4
+    spread:
+      over:
+        axes.density.base:
+          values: [10, 20, 30]
+"""
+    assert "no-generator" not in codes(text)
+
+
+def test_axis_generator_missing_in_one_group():
+    # basta un gruppo scoperto: quello stream fallisce davvero
+    text = BASE.replace("    values: [10, 30]\n", "") + """streams:
+  a:
+    axes:
+      density: {base: 20, range: 5, n: 4}
+  b:
+    base:
+      volume: -6
+"""
+    assert "no-generator" in codes(text)
+
+
 def test_multiple_generators():
     text = BASE + "    ramp: {start: 1, stop: 5, step: 1}\n"
     assert "multi-generator" in codes(text)
