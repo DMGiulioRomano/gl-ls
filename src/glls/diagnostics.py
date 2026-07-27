@@ -1496,7 +1496,8 @@ def _unreferenced(bag: Bag, path: KeyPath, var: str, where: str) -> None:
 
 def _ancestor_knob_bindings(doc: Document, path: KeyPath) -> Dict[str, Any]:
     """Le manopole di ``let:`` in scope per una expr a ``path``: quelle di
-    documento piu', se la expr vive dentro uno stream, quelle di gruppo."""
+    documento piu', se la expr vive dentro uno stream, quelle di gruppo e le
+    manopole di voce del suo ``spread.let``."""
     bindings: Dict[str, Any] = {}
     doc_let = doc.get(("let",))
     if isinstance(doc_let, dict):
@@ -1507,6 +1508,21 @@ def _ancestor_knob_bindings(doc: Document, path: KeyPath) -> Dict[str, Any]:
         if isinstance(group_let, dict):
             for name, val in group_let.items():
                 bindings[name] = _knob_binding(val)
+        # manopole di voce: il runtime le inietta per nome in TUTTE le expr
+        # dello stream generato, non solo in quelle del blocco ``spread`` —
+        # un asse del gruppo che legge ``spread.let`` e' la forma canonica
+        # (``base: {expr: "respiro + livello"}``). Il valore per voce e' uno
+        # scalare anche in forma banda (un pescaggio per voce); solo un
+        # envelope disegnato resta un envelope.
+        cfg = doc.get(("streams", path[1]))
+        if isinstance(cfg, dict) and "spread" in cfg:
+            spread = _merged_spread(doc.get(("spread",)), cfg.get("spread"))
+            voice_let = spread.get("let") if isinstance(spread, dict) else None
+            if isinstance(voice_let, dict):
+                for name, val in voice_let.items():
+                    bindings[name] = (
+                        _ENV_PLACEHOLDER if isinstance(val, list) else 1.0
+                    )
     return bindings
 
 
