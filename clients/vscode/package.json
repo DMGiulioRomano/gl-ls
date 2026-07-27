@@ -16,6 +16,15 @@
   "activationEvents": ["onLanguage:yaml"],
   "main": "./extension.js",
   "contributes": {
+    "configurationDefaults": {
+      "editor.semanticTokenColorCustomizations": {
+        "enabled": true,
+        "rules": {
+          "struct": { "foreground": "#4EC9B0", "bold": true },
+          "modifier": { "foreground": "#C586C0", "bold": true }
+        }
+      }
+    },
     "configuration": {
       "title": "gl-ls",
       "properties": {
