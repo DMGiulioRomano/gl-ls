@@ -1479,6 +1479,66 @@ def test_spread_let_expr_error_propagated():
     assert "expr" in codes(text)
 
 
+def test_spread_let_read_by_group_axis():
+    # una manopola di voce e' iniettata per nome in tutte le expr dello stream:
+    # un asse del gruppo che la legge non e' un 'nome ignoto'
+    text = BASE + """streams:
+  fan:
+    let:
+      respiro: {base: 20, range: 1}
+    axes:
+      density:
+        base:
+          expr: "respiro + livello"
+    spread:
+      over:
+        base.onset:
+          values: [0, 1, 2]
+      let:
+        livello: {expr: "i * 0.8"}
+"""
+    assert diags_of(text) == []
+
+
+def test_spread_let_from_global_block_read_by_group_axis():
+    # il blocco spread globale e' il default della entry: anche le sue
+    # manopole di voce sono in scope per le expr del gruppo
+    text = BASE + """spread:
+  let:
+    livello: {expr: "i * 0.8"}
+  over:
+    base.onset:
+      values: [0, 1, 2]
+streams:
+  fan:
+    axes:
+      density:
+        base:
+          expr: "livello + 1"
+    spread: {}
+"""
+    assert diags_of(text) == []
+
+
+def test_spread_let_not_in_scope_for_other_group():
+    # le manopole di voce sono locali al gruppo: un fratello non le vede
+    text = BASE + """streams:
+  fan:
+    spread:
+      over:
+        base.onset:
+          values: [0, 1, 2]
+      let:
+        livello: {expr: "i * 0.8"}
+  altro:
+    axes:
+      density:
+        base:
+          expr: "livello + 1"
+"""
+    assert "expr" in codes(text)
+
+
 def test_spread_let_shadows_group_let():
     text = BASE + """streams:
   s:
