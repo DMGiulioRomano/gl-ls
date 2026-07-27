@@ -1,6 +1,7 @@
 """Token semantici: la struttura del linguaggio sopra l'highlight YAML.
 
-Classi: sezioni axes/stack/base (struct), sezione streams (namespace),
+Classi: sezioni axes/axis/stack (struct, ovunque compaiano) e base radice,
+blocchi let (modifier, a ogni livello), sezione streams (namespace),
 chiave spread (decorator), altre chiavi radice (keyword), nomi d'asse
 (type), nomi di stream (class), chiavi engine (property), marcatori di
 generatore/banda (macro), valori enum (enumMember), path puntati
@@ -31,6 +32,7 @@ TOKEN_TYPES = [
     "struct",      # 10: sezioni axes/stack/base
     "namespace",   # 11: sezione streams
     "decorator",   # 12: chiave spread
+    "modifier",    # 13: chiave let (a ogni livello)
 ]
 _T = {name: i for i, name in enumerate(TOKEN_TYPES)}
 
@@ -44,6 +46,14 @@ _EXPR_TOKEN = re.compile(r"(?P<num>\d+(?:\.\d+)?)|(?P<name>[A-Za-z_]\w*)|(?P<op>
 
 
 def _classify_key(path, ctx: str, name: str) -> Optional[int]:
+    # ``let``, ``axes``/``axis`` e ``stack`` tengono lo stesso colore ovunque
+    # compaiano come chiave del linguaggio; dentro ``let:`` e ``streams:`` i
+    # nomi sono liberi (una manopola o uno stream di nome ``stack`` resta tale).
+    if ctx not in ("let", "streams"):
+        if name == "let":
+            return _T["modifier"]
+        if name in ("axes", "axis", "stack"):
+            return _T["struct"]
     if name == "spread":
         return _T["decorator"]
     if ctx == "root":
@@ -106,7 +116,8 @@ def tokens(doc: Document, m: StudyModel) -> List[int]:
                 raw.append((ks.start_line, ks.start_col + offset, len(head),
                             _T["property"]))
                 raw.append((ks.start_line, ks.start_col + offset + len(head) + 1,
-                            len(marker), _T["macro"]))
+                            len(marker),
+                            _T["modifier"] if marker == "let" else _T["macro"]))
             else:
                 tok = _classify_key(path, ctx, key)
                 if tok is not None and ks.start_line == ks.end_line:
