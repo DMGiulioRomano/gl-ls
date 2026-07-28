@@ -1213,8 +1213,20 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
         bag.add(bpath + ("time_mode",),
                 f"time_mode '{tm}' non valido (absolute | normalized).",
                 code="bad-enum", prefer_value=True)
+    if "seed" in base:
+        bag.add(bpath + ("seed",),
+                "seed per-stream: l'engine lo ignora — StreamConfig.from_yaml "
+                "sovrascrive sempre la chiave col seed top-level. Per un seed "
+                "del run usa 'seed:' a livello di documento; per far condividere "
+                "la stessa sequenza a piu' stream usa 'rng_group'.",
+                types.DiagnosticSeverity.Warning,
+                code="seed-per-stream-ignored")
     rng_group = base.get("rng_group")
-    if isinstance(rng_group, (list, dict)):
+    # Un nodo-expr e' un dict ma non e' un generatore: _resolve_expr_nodes lo
+    # risolve prima che l'engine veda il valore (idioma dello studio: un `let`
+    # che nomina il gruppo, condiviso fra le scale).
+    if (isinstance(rng_group, (list, dict))
+            and not exprlang.is_expr_node(rng_group)):
         bag.add(bpath + ("rng_group",),
                 "rng_group e' un'identita' testuale (PGE #169), non un "
                 "parametro sintetizzabile: liste e generatori non sono "

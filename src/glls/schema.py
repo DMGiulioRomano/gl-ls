@@ -199,7 +199,11 @@ _ENGINE_STREAM_KEYS = [
     _k("range_always_active", "true: i `_range` sono sempre attivi anche senza dephase."),
     _k("voices", "Multi-voice: num_voices, scatter, pitch, onset_offset, "
                  "pointer, pan (strategy per dimensione)."),
-    _k("seed", "Seed per-stream (override del seed globale engine)."),
+    _k("seed", "**Ignorato dall'engine.** Il seed e' top-level, non per-stream: "
+               "`StreamConfig.from_yaml` sovrascrive sempre questa chiave col "
+               "seed del documento. Per la riproducibilita' del run usa `seed:` "
+               "top-level; per far condividere la stessa sequenza a piu' stream "
+               "usa `rng_group` (PGE #169)."),
     _k("rng_group", "**Identita' RNG condivisa fra stream** (PGE #169, stringa). "
                     "Stream con lo stesso gruppo — e stessi parametri stocastici — "
                     "pescano le stesse sequenze pseudo-casuali (variazioni `_range`, "

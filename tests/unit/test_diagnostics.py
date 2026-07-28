@@ -719,6 +719,19 @@ def test_rng_group_generator_dict_is_flagged():
     assert "rng-group-type" in codes(text)
 
 
+def test_rng_group_expr_node_is_clean():
+    # un nodo-expr E' un dict, ma _resolve_expr_nodes lo risolve prima che
+    # l'engine veda il valore: e' l'idioma naturale dello studio.
+    text = BASE.replace("base:\n", 'base:\n  rng_group: {expr: "7"}\n')
+    assert "rng-group-type" not in codes(text)
+
+
+def test_rng_group_expr_node_with_let_is_clean():
+    text = BASE.replace(
+        "base:\n", 'base:\n  rng_group: {let: {g: 4}, expr: "g*2"}\n')
+    assert "rng-group-type" not in codes(text)
+
+
 def test_expr_in_spread_uses_containing_stream_n():
     # due entry-spread: l'expr vive nella seconda (n=5); 1/(n-5) deve dare
     # divisione per zero con n=5, non passare pulito con la n=3 della prima.
@@ -1684,3 +1697,24 @@ def test_versions_reserved_keys_not_axes():
     # onset/duration/chunk non sono assi: non passano dal discriminatore
     text = BASE + "versions:\n  d: {values: [1, 2]}\n  onset: 0\n  duration: 6\n"
     assert "versions-mixed-axis" not in codes(text)
+
+
+def test_seed_per_stream_is_reported_as_ignored():
+    # PGE sovrascrive sempre il seed per-stream col top-level
+    # (StreamConfig.from_yaml: kwargs['seed'] = seed): scriverlo in base
+    # non ha effetto, ed e' il malinteso da cui nasce PGE #169.
+    text = BASE.replace("base:\n", "base:\n  seed: 256\n")
+    assert "seed-per-stream-ignored" in codes(text)
+
+
+def test_seed_per_stream_is_a_warning_not_an_error():
+    from lsprotocol import types
+    text = BASE.replace("base:\n", "base:\n  seed: 256\n")
+    d = next(d for d in diags_of(text) if d.code == "seed-per-stream-ignored")
+    assert d.severity == types.DiagnosticSeverity.Warning
+
+
+def test_top_level_seed_is_clean():
+    # il seed globale dello studio e' quello vero: nessuna segnalazione
+    text = "seed: 256\n" + BASE
+    assert "seed-per-stream-ignored" not in codes(text)
