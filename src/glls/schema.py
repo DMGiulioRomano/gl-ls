@@ -135,6 +135,27 @@ COMPACT_ENV_DOC = (
     "`power`, o dict `{type, ...}`; `wrap` = booleano. Il quinto elemento "
     "`null` esiste solo per raggiungere il sesto."
 )
+# ``spread.n`` come Env: il coro cresce e cala nel tempo. Il pezzo che sorprende
+# non e' la sintassi ma la conseguenza sul volume, quindi la doc la dice subito.
+SPREAD_N_ENV_DOC = (
+    "**`n` come envelope** — oltre a scalare e nodo-expr, `n` accetta un Env "
+    "(`[[t, n], ...]`, `[a, b]`, `{type, points, curve}`): il numero di voci "
+    "*udibili* varia nel tempo dentro la singola versione.\n\n"
+    "Uno stream engine e' statico, il loro numero non puo' cambiare in corsa: "
+    "le voci si generano **tutte fino al picco** di `n(t)` (arrotondato in su "
+    "— ed e' il picco che deve coincidere coi conteggi posseduti da `over`) e "
+    "un gate su `base.volume` le accende e spegne:\n\n"
+    "    gain(voce i) = clamp(n(t) - i, 0, 1)\n\n"
+    "La curva la decide l'interpolazione dell'Env: `type: step` le accende di "
+    "scatto, la rampa le fa entrare sfumando.\n\n"
+    "Di conseguenza il `volume` di quelle voci e' **generato**, non e' piu' "
+    "quello scritto nel documento. Il livello «voce accesa» e' il `volume` "
+    "scalare della entry, o in mancanza quello di `base:` del documento: un "
+    "`volume` gia' envelope, o un `over.base.volume` dichiarato insieme al "
+    "gate, sono **errore** (si sovrascriverebbero). Per un profilo di volume "
+    "proprio, usa `n` scalare e scrivi gli envelope in `over.base.volume`."
+)
+
 _LET_DOC_SPREAD = (
     "**Manopole di voce.** Blocco `let:` dentro `spread:`, accanto a `n`/`over`: "
     "un valore pescato/derivato per stream generato. Solo `expr` (con `i`/`n`) e "
@@ -481,7 +502,7 @@ _STREAM_OVERRIDE_KEYS = [
 _SPREAD_KEYS = [
     _k("n", "Quanti stream generare. Se una strategy possiede il conteggio "
             "(values/ramp piena/banda con n) deve **coincidere**; se omesso lo "
-            "definisce l'unico conteggio posseduto."),
+            "definisce l'unico conteggio posseduto.\n\n" + SPREAD_N_ENV_DOC),
     _k("over", "`{path puntato: strategy}` — i valori si appaiano **per "
                "indice** tra i path (niente prodotto cartesiano). Ammessa "
                "anche la forma dotted `over.<path>: ...` al primo livello."),

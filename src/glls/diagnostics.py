@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import difflib
 import itertools
+import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from lsprotocol import types
@@ -25,6 +26,8 @@ from .model import (
     StudyModel,
     expand_over_items,
     is_compact_env,
+    is_n_env,
+    n_env_values,
     over_items,
     ramp_count,
     split_spread_over_key,
@@ -960,6 +963,11 @@ def _check_spread(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
         elif mk == "expr":
             expr_entries.append(oe)
 
+    # il gate esiste solo se l'Env di 'n' regge: con un picco malformato il
+    # runtime si ferma prima, in _resolve_n, e non arriva mai a scriverlo
+    if n_decl is not None and is_n_env(spread.get("n")):
+        _check_n_env_gate(bag, doc, spath, entries)
+
     counts = {c for _, c in owned}
     if n_decl is not None:
         counts.add(n_decl)
@@ -1008,12 +1016,15 @@ def _report_strategy_count(bag: Bag, spath: KeyPath, oe, markers: List[str]) -> 
 
 
 def _check_spread_n(bag: Bag, spath: KeyPath, raw_n: Any) -> Optional[int]:
-    """``spread.n`` normalizzato: intero >= 1, o nodo-expr valutato (percorso-v1).
+    """``spread.n`` normalizzato: intero >= 1, Env (il picco), o nodo-expr
+    valutato (percorso-v1).
 
     Nel nodo-expr il runtime non inietta ``i``/``n`` (li possiede lo spread):
     lo scope e' il solo ``let``, e il risultato deve essere un intero >= 1."""
     if raw_n is None:
         return None
+    if is_n_env(raw_n):
+        return _check_spread_n_env(bag, spath, raw_n)
     if exprlang.is_expr_node(raw_n):
         try:
             text, let = exprlang.parse_expr_node(raw_n)
@@ -1032,10 +1043,92 @@ def _check_spread_n(bag: Bag, spath: KeyPath, raw_n: Any) -> Optional[int]:
         return out
     if not isinstance(raw_n, int) or isinstance(raw_n, bool) or raw_n < 1:
         bag.add(spath + ("n",),
-                "spread.n deve essere un intero >= 1 (o un nodo-expr).",
+                "spread.n deve essere un intero >= 1, un envelope o un nodo-expr.",
                 code="bad-n", prefer_value=True)
         return None
     return raw_n
+
+
+def _check_spread_n_env(bag: Bag, spath: KeyPath, raw_n: Any) -> Optional[int]:
+    """``spread.n`` come Env: il numero di voci *udibili* varia nel tempo.
+
+    Il conteggio che entra nel confronto coi posseduti di ``over`` e' il
+    **picco** arrotondato in su (runtime ``spread._n_env_peak``): le voci si
+    generano tutte fino al massimo di ``n(t)`` e un gate su ``base.volume`` le
+    accende e spegne."""
+    values = n_env_values(raw_n)
+    if values is None:
+        bag.add(spath + ("n",),
+                "spread.n come envelope: i punti vogliono valori numerici "
+                "(quante voci a quell'istante) — la forma compatta a cicli qui "
+                "non vale.",
+                code="bad-n", prefer_value=True)
+        return None
+    peak = max(values)
+    if math.ceil(peak) < 1:
+        bag.add(spath + ("n",),
+                f"spread.n come envelope: il picco deve arrivare almeno a 1 "
+                f"voce (massimo {peak:g}) — non ci sarebbe niente da generare.",
+                code="bad-n", prefer_value=True)
+        return None
+    return math.ceil(peak)
+
+
+def _check_n_env_gate(bag: Bag, doc: Document, spath: KeyPath,
+                      entries: Dict[str, Any]) -> None:
+    """Conflitti sul volume quando ``n`` e' un Env (runtime ``_plan_entry`` /
+    ``_gate_envelopes``): il gate ``clamp(n(t) - i, 0, 1)`` **genera**
+    ``base.volume`` per ogni voce, quindi il volume scritto a mano e il gate
+    scriverebbero lo stesso campo.
+
+    Solo dentro una entry di ``streams:``: il blocco ``spread:`` globale e' un
+    default parziale, il gate lo monta la entry che lo eredita (e che puo'
+    ridichiarare ``n`` scalare)."""
+    if spath[:1] != ("streams",):
+        return
+    if "base.volume" in entries:
+        bag.add(_over_entry_kp(spath, entries["base.volume"]),
+                "spread: 'n' come envelope e 'over.base.volume' scrivono "
+                "entrambi il volume delle voci — tieni uno dei due, il gate di "
+                "'n' o gli envelope scritti a mano in 'over'.",
+                code="spread-n-gate")
+        return
+    volume, vkp = _gate_volume(doc, spath)
+    if _is_gate_level(doc, volume, vkp):
+        return
+    bag.add(vkp,
+            "spread: 'n' come envelope genera il gate su 'volume', ma il volume "
+            "dichiarato e' un envelope — il gate lo sovrascriverebbe. Il livello "
+            "'voce accesa' dev'essere uno scalare; per un profilo di volume "
+            "proprio usa 'n' scalare e scrivi gli envelope in 'over.base.volume'.",
+            code="spread-n-gate", prefer_value=True)
+
+
+def _gate_volume(doc: Document, spath: KeyPath) -> Tuple[Any, KeyPath]:
+    """Il livello 'voce accesa' del gate e dov'e' scritto: il ``base.volume``
+    della entry se la entry lo dichiara, altrimenti quello del documento
+    (runtime ``_plan_entry``, che riceve ``base_volume`` da ``resolve_streams``)."""
+    entry_base = doc.get(spath[:-1] + ("base",))
+    if isinstance(entry_base, dict) and "volume" in entry_base:
+        return entry_base["volume"], spath[:-1] + ("base", "volume")
+    return doc.get(("base", "volume")), ("base", "volume")
+
+
+def _is_gate_level(doc: Document, volume: Any, vkp: KeyPath) -> bool:
+    """True se ``volume`` regge come livello scalare del gate. Assente vale 0
+    dB. Un nodo-expr si giudica dal risultato — il runtime lo vede gia'
+    risolto (``apply_document_let`` gira prima di ``expand_spreads``) — e se
+    non risolve staticamente si tace, come altrove."""
+    if volume is None or _num(volume) is not None:
+        return True
+    if not exprlang.is_expr_node(volume):
+        return False
+    try:
+        text, let = exprlang.parse_expr_node(volume)
+        out = exprlang.eval_expr(text, {**_ancestor_knob_bindings(doc, vkp), **let})
+    except ValueError:
+        return True
+    return _num(out) is not None
 
 
 _LET_BAND_KEYS = frozenset({"base", "range", "seed", "distribution", "drift"})
