@@ -24,6 +24,7 @@ from .model import (
     VERSIONS_RESERVED,
     StudyModel,
     expand_over_items,
+    is_compact_env,
     over_items,
     ramp_count,
     split_spread_over_key,
@@ -1471,9 +1472,10 @@ def _let_names(node: Any) -> List[str]:
 
 def _check_let_blocks(bag: Bag, doc: Document, m: StudyModel) -> None:
     """Manopole ``let:`` di documento / gruppo / voce: ombreggiamento fra i
-    livelli, collisione con le variabili di ``versions:`` e manopole non
-    referenziate. Lo *schema* dei valori (nomi liberi, Env ricorsivo) e la
-    valutazione delle expr derivate passano da schema/``_check_expr_nodes``."""
+    livelli, collisione con le variabili di ``versions:``, manopole non
+    referenziate e vincoli della forma compatta a cicli. Lo *schema* dei valori
+    (nomi liberi, Env ricorsivo) e la valutazione delle expr derivate passano da
+    schema/``_check_expr_nodes``."""
     data = doc.data
     if not isinstance(data, dict):
         return
@@ -1482,9 +1484,10 @@ def _check_let_blocks(bag: Bag, doc: Document, m: StudyModel) -> None:
     doc_let = data.get("let")
     doc_names = set(_let_names(doc_let))
     if isinstance(doc_let, dict):
-        for var in doc_let:
+        for var, val in doc_let.items():
             if var not in used:
                 _unreferenced(bag, ("let", var), var, "documento")
+            _check_compact_knob(bag, ("let", var), val, f"let['{var}']")
 
     versions = data.get("versions")
     versions_vars = {
@@ -1501,11 +1504,13 @@ def _check_let_blocks(bag: Bag, doc: Document, m: StudyModel) -> None:
         group_names = set(_let_names(group_let))
         gpath: KeyPath = ("streams", sname, "let")
         if isinstance(group_let, dict):
-            for var in group_let:
+            for var, val in group_let.items():
                 if var in doc_names:
                     _shadow(bag, gpath + (var,), var, "documento")
                 elif var not in used:
                     _unreferenced(bag, gpath + (var,), var, f"gruppo '{sname}'")
+                _check_compact_knob(bag, gpath + (var,), val,
+                                    f"streams['{sname}'].let['{var}']")
 
         spread = scfg.get("spread")
         voice_let = spread.get("let") if isinstance(spread, dict) else None
@@ -1542,6 +1547,47 @@ def _unreferenced(bag: Bag, path: KeyPath, var: str, where: str) -> None:
             "espressione — una manopola non usata e' inerte (come una variabile "
             "di 'versions:' non referenziata).",
             code="let-unreferenced")
+
+
+def _check_compact_knob(bag: Bag, path: KeyPath, spec: Any, label: str) -> None:
+    """Forma compatta a cicli come valore di ``let:`` — i due vincoli propri
+    dello studio (runtime ``value_generators.expand_compact``).
+
+    ``end_time`` dev'essere 1: in un ``let:`` l'Env vive sul tempo normalizzato
+    dello stream, non sui secondi, e un ``end_time`` in secondi produce
+    breakpoint tutti oltre il bordo che il runtime appiattisce in hold **senza
+    errore** — il tipo peggiore. I punti del pattern devono essere coppie
+    ``[x%, y]``: il tipo d'interpolazione per-punto (3-tuple dell'engine) non ha
+    rappresentazione nelle forme statiche di Env di studio, dove ``type`` e'
+    globale. In piu' un warning sulle ``x%`` fuori scala, gemello di
+    ``band-time`` ma su [0, 100]."""
+    if not is_compact_env(spec):
+        return
+    if _num(spec[1]) != 1:
+        bag.add(path + (1,),
+                f"{label}: forma compatta, 'end_time' deve essere 1 (ricevuto "
+                f"{_num(spec[1]):g}) — dentro un let l'Env vive sul tempo "
+                "normalizzato dello stream, non in secondi (i breakpoint "
+                "cadrebbero tutti oltre il bordo, appiattiti in hold senza "
+                "errore).",
+                code="let-compact-end-time", prefer_value=True,
+                data={"fix": {"kind": "rename-value", "new": "1"}})
+    for i, p in enumerate(spec[0]):
+        if len(p) != 2:
+            bag.add(path + (0, i),
+                    f"{label}: forma compatta, i punti del pattern devono "
+                    f"essere coppie [x%, y] (ricevuto {list(p)!r}) — il tipo "
+                    "per-punto non esiste in un Env di studio, usa 'type' "
+                    "globale (quarto elemento della forma compatta).",
+                    code="let-compact-point", prefer_value=True)
+            continue
+        x = _num(p[0])
+        if x is not None and not (0 <= x <= 100):
+            bag.add(path + (0, i, 0),
+                    f"{label}: forma compatta, x={x:g} fuori da [0, 100] (le X "
+                    "del pattern sono percentuali del ciclo).",
+                    types.DiagnosticSeverity.Warning, code="let-compact-x",
+                    prefer_value=True)
 
 
 # ---------------------------------------------------------------------------
