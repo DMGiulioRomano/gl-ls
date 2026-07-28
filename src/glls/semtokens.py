@@ -14,8 +14,8 @@ from typing import List, Optional, Tuple
 
 from . import engine_info as EI
 from . import schema
-from .model import (AXES_RESERVED, STACK_RESERVED, StudyModel, split_over_key,
-                    split_spread_over_key)
+from .model import (AXES_RESERVED, STACK_RESERVED, StudyModel, is_compact_env,
+                    split_over_key, split_spread_over_key)
 from .yamlpos import Document
 
 TOKEN_TYPES = [
@@ -82,6 +82,21 @@ def _classify_key(path, ctx: str, name: str) -> Optional[int]:
     return None
 
 
+def _compact_slot(doc: Document, path) -> Optional[int]:
+    """Token dei posizionali di una forma compatta ``[pattern, end_time,
+    n_reps, interp?, time_dist?, wrap?]``.
+
+    Non sono breakpoint — leggerli come tali (numeri del pattern) confonde la
+    colorazione: ``end_time``/``n_reps`` prendono ``number``, i tre opzionali
+    (``interp``, ``time_dist``, ``wrap``) ``enumMember``, perche' pescano da un
+    insieme chiuso di valori. Il pattern in posizione 0 resta com'e'."""
+    if not path or not isinstance(path[-1], int) or path[-1] == 0:
+        return None
+    if not is_compact_env(doc.get(path[:-1])):
+        return None
+    return _T["number"] if path[-1] in (1, 2) else _T["enumMember"]
+
+
 def tokens(doc: Document, m: StudyModel) -> List[int]:
     raw: List[Tuple[int, int, int, int]] = []  # line, col, length, type
     lines = doc.text.splitlines()
@@ -132,9 +147,13 @@ def tokens(doc: Document, m: StudyModel) -> List[int]:
             parent_key = path[-1] if isinstance(path[-1], str) else (
                 path[-2] if len(path) >= 2 and isinstance(path[-2], str) else None
             )
+            slot = _compact_slot(doc, path)
             if parent_key == "expr":
                 raw.extend(_expr_tokens(lines, vs.start_line, vs.start_col,
                                         vs.end_col))
+            elif slot is not None:
+                raw.append((vs.start_line, vs.start_col,
+                            vs.end_col - vs.start_col, slot))
             elif value in _ENUM_VALUES and isinstance(path[-1], str):
                 raw.append((vs.start_line, vs.start_col,
                             vs.end_col - vs.start_col, _T["enumMember"]))

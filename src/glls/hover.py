@@ -14,7 +14,8 @@ from lsprotocol import types
 from . import engine_info as EI
 from . import schema
 from .convert import as_num as _num, fmt_num
-from .model import (AXES_RESERVED, STACK_RESERVED, StudyModel, split_over_key,
+from .model import (AXES_RESERVED, STACK_RESERVED, StudyModel, compact_summary,
+                    in_spread_let, is_compact_env, split_over_key,
                     split_spread_over_key)
 from .yamlpos import Document, KeyPath
 
@@ -145,6 +146,10 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
                                    intro="Forma dotted di `over`: ")
     if ctx == "over":
         return _hover_over_key(doc, path, str(name), rng)
+    if ctx == "let":
+        # manopole a nomi liberi: l'unico sapere da dare e' la forma del valore
+        # (la compatta e' posizionale, si legge male a occhio)
+        return _hover_knob(doc, path, str(name), rng)
 
     k = schema.key_in(ctx, str(name))
     if k is None:
@@ -163,6 +168,18 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
         text += ("\n\nCode action disponibile dopo una modifica: *riscala i "
                  "breakpoint assoluti degli envelope al nuovo valore*.")
     return _md(text, rng)
+
+
+def _hover_knob(doc: Document, path: KeyPath, name: str,
+                rng: Optional[types.Range]) -> Optional[types.Hover]:
+    """Hover sul nome di una manopola di ``let:``. La forma compatta a cicli
+    (solo documento e gruppo: in ``spread.let`` il runtime non la risolve) porta
+    il riassunto dell'espansione piu' la legenda dei posizionali."""
+    value = doc.get(path)
+    if not is_compact_env(value) or in_spread_let(path):
+        return None
+    return _md(f"**Manopola `{name}`** — {compact_summary(value)}\n\n"
+               + schema.COMPACT_ENV_DOC, rng)
 
 
 def _dotted_engine_path(path: KeyPath) -> Optional[str]:
