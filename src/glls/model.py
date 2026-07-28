@@ -7,6 +7,7 @@ tollerante: il modello si costruisce anche da documenti incompleti.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -289,6 +290,56 @@ def _is_expr_node(spec: Any) -> bool:
     return isinstance(spec, dict) and "expr" in spec
 
 
+def is_n_env(raw: Any) -> bool:
+    """True se ``spread.n`` e' scritto come Env — il coro cresce e cala *nel
+    tempo* dentro la singola versione (runtime ``spread._is_n_env``).
+
+    Le forme di sempre di un Env disegnato: ``[[t, n], ...]``, lo shorthand
+    ``[a, b]``, ``{type, points, curve}``. Il nodo-expr (dict con ``expr`` e
+    senza ``points``) resta il caso scalare per-istanza, e l'intero pure.
+    """
+    if isinstance(raw, dict):
+        return "points" in raw
+    return isinstance(raw, (list, tuple)) and bool(raw)
+
+
+def n_env_values(raw: Any) -> Optional[List[float]]:
+    """I valori Y di un ``spread.n`` come Env, None se non sono tutti numeri.
+
+    Come il runtime (``spread._n_env_peak``): il secondo elemento di ogni
+    punto, o il punto stesso nello shorthand ``[a, b]``. La forma compatta a
+    cicli finisce qui con un pattern al posto di un numero — e infatti non e'
+    ammessa per ``n``.
+    """
+    points = raw.get("points") if isinstance(raw, dict) else raw
+    if not isinstance(points, (list, tuple)) or not points:
+        return None
+    out: List[float] = []
+    for p in points:
+        if isinstance(p, (list, tuple)):
+            v = p[1] if len(p) >= 2 else None
+        else:
+            v = p
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            return None
+        out.append(float(v))
+    return out
+
+
+def n_env_peak(raw: Any) -> Optional[int]:
+    """Voci da generare con ``n`` come Env: ``ceil`` del picco di ``n(t)``.
+
+    Uno stream nel documento engine e' statico, il loro numero non cambia in
+    corsa: le voci si generano tutte fino al massimo e un gate su
+    ``base.volume`` le accende e spegne. Il conteggio da confrontare coi
+    posseduti di ``over`` e' quindi il picco, non il primo o l'ultimo punto.
+    """
+    values = n_env_values(raw)
+    if values is None:
+        return None
+    return math.ceil(max(values))
+
+
 def _eval_spread_n(node: Dict[str, Any]) -> Optional[int]:
     """``spread.n`` da nodo-expr (percorso-v1), valutato col solo ``let``.
 
@@ -315,8 +366,6 @@ def ramp_count(cfg: Dict[str, Any]) -> Optional[int]:
     s0, s1, st = _num(start), _num(stop), _num(step)
     if s0 is None or s1 is None or st is None or st <= 0:
         return None
-    import math
-
     span = abs(s1 - s0)
     return int(math.floor(span / st + 1e-9)) + 1
 
@@ -407,7 +456,10 @@ def build(doc: Document) -> StudyModel:
             n = None
             if is_spread:
                 decl = spread.get("n")
-                if isinstance(decl, int) and not isinstance(decl, bool):
+                if is_n_env(decl):
+                    # n nel tempo: gli stream generati sono quelli del picco
+                    n = n_env_peak(decl)
+                elif isinstance(decl, int) and not isinstance(decl, bool):
                     n = decl
                 elif _is_expr_node(decl):
                     n = _eval_spread_n(decl)

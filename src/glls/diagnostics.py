@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import difflib
 import itertools
+import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from lsprotocol import types
@@ -25,6 +26,8 @@ from .model import (
     StudyModel,
     expand_over_items,
     is_compact_env,
+    is_n_env,
+    n_env_values,
     over_items,
     ramp_count,
     split_spread_over_key,
@@ -403,7 +406,11 @@ def _check_band(bag: Bag, doc: Document, path: KeyPath, cfg: Dict[str, Any],
     posizione nel documento; il default e' ``path + subkeys`` (banda annidata
     canonica). Nello spread con chiavi puntate una banda vive su piu' righe
     (``.base``/``.range``/``.seed``): il locator punta ogni diagnostica alla
-    riga giusta."""
+    riga giusta.
+
+    Gli Env della banda (``base``/``range``/``drift.step``) passano tutti dalla
+    seam ``expand_params`` del runtime, quindi qui valgono anche i vincoli della
+    forma compatta a cicli — non solo dentro ``let:`` (issue #29)."""
     if locate is None:
         def locate(*ks: Any) -> KeyPath:
             return path + tuple(ks)
@@ -440,8 +447,12 @@ def _check_band(bag: Bag, doc: Document, path: KeyPath, cfg: Dict[str, Any],
                 bag.add(locate("drift", "step"),
                         f"{label}: drift.step negativo — 0 congela, > 0 cammina.",
                         code="drift-step", prefer_value=True)
+            _check_compact_knob(bag, locate("drift", "step"), drift.get("step"),
+                                f"{label} drift.step")
     for border in ("base", "range"):
         _check_env_times(bag, locate(border), cfg.get(border), label)
+        _check_compact_knob(bag, locate(border), cfg.get(border),
+                            f"{label} {border}")
 
 
 def _check_env_times(bag: Bag, path: KeyPath, form: Any, label: str) -> None:
@@ -952,6 +963,11 @@ def _check_spread(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
         elif mk == "expr":
             expr_entries.append(oe)
 
+    # il gate esiste solo se l'Env di 'n' regge: con un picco malformato il
+    # runtime si ferma prima, in _resolve_n, e non arriva mai a scriverlo
+    if n_decl is not None and is_n_env(spread.get("n")):
+        _check_n_env_gate(bag, doc, spath, entries)
+
     counts = {c for _, c in owned}
     if n_decl is not None:
         counts.add(n_decl)
@@ -1000,12 +1016,15 @@ def _report_strategy_count(bag: Bag, spath: KeyPath, oe, markers: List[str]) -> 
 
 
 def _check_spread_n(bag: Bag, spath: KeyPath, raw_n: Any) -> Optional[int]:
-    """``spread.n`` normalizzato: intero >= 1, o nodo-expr valutato (percorso-v1).
+    """``spread.n`` normalizzato: intero >= 1, Env (il picco), o nodo-expr
+    valutato (percorso-v1).
 
     Nel nodo-expr il runtime non inietta ``i``/``n`` (li possiede lo spread):
     lo scope e' il solo ``let``, e il risultato deve essere un intero >= 1."""
     if raw_n is None:
         return None
+    if is_n_env(raw_n):
+        return _check_spread_n_env(bag, spath, raw_n)
     if exprlang.is_expr_node(raw_n):
         try:
             text, let = exprlang.parse_expr_node(raw_n)
@@ -1024,10 +1043,92 @@ def _check_spread_n(bag: Bag, spath: KeyPath, raw_n: Any) -> Optional[int]:
         return out
     if not isinstance(raw_n, int) or isinstance(raw_n, bool) or raw_n < 1:
         bag.add(spath + ("n",),
-                "spread.n deve essere un intero >= 1 (o un nodo-expr).",
+                "spread.n deve essere un intero >= 1, un envelope o un nodo-expr.",
                 code="bad-n", prefer_value=True)
         return None
     return raw_n
+
+
+def _check_spread_n_env(bag: Bag, spath: KeyPath, raw_n: Any) -> Optional[int]:
+    """``spread.n`` come Env: il numero di voci *udibili* varia nel tempo.
+
+    Il conteggio che entra nel confronto coi posseduti di ``over`` e' il
+    **picco** arrotondato in su (runtime ``spread._n_env_peak``): le voci si
+    generano tutte fino al massimo di ``n(t)`` e un gate su ``base.volume`` le
+    accende e spegne."""
+    values = n_env_values(raw_n)
+    if values is None:
+        bag.add(spath + ("n",),
+                "spread.n come envelope: i punti vogliono valori numerici "
+                "(quante voci a quell'istante) — la forma compatta a cicli qui "
+                "non vale.",
+                code="bad-n", prefer_value=True)
+        return None
+    peak = max(values)
+    if math.ceil(peak) < 1:
+        bag.add(spath + ("n",),
+                f"spread.n come envelope: il picco deve arrivare almeno a 1 "
+                f"voce (massimo {peak:g}) — non ci sarebbe niente da generare.",
+                code="bad-n", prefer_value=True)
+        return None
+    return math.ceil(peak)
+
+
+def _check_n_env_gate(bag: Bag, doc: Document, spath: KeyPath,
+                      entries: Dict[str, Any]) -> None:
+    """Conflitti sul volume quando ``n`` e' un Env (runtime ``_plan_entry`` /
+    ``_gate_envelopes``): il gate ``clamp(n(t) - i, 0, 1)`` **genera**
+    ``base.volume`` per ogni voce, quindi il volume scritto a mano e il gate
+    scriverebbero lo stesso campo.
+
+    Solo dentro una entry di ``streams:``: il blocco ``spread:`` globale e' un
+    default parziale, il gate lo monta la entry che lo eredita (e che puo'
+    ridichiarare ``n`` scalare)."""
+    if spath[:1] != ("streams",):
+        return
+    if "base.volume" in entries:
+        bag.add(_over_entry_kp(spath, entries["base.volume"]),
+                "spread: 'n' come envelope e 'over.base.volume' scrivono "
+                "entrambi il volume delle voci — tieni uno dei due, il gate di "
+                "'n' o gli envelope scritti a mano in 'over'.",
+                code="spread-n-gate")
+        return
+    volume, vkp = _gate_volume(doc, spath)
+    if _is_gate_level(doc, volume, vkp):
+        return
+    bag.add(vkp,
+            "spread: 'n' come envelope genera il gate su 'volume', ma il volume "
+            "dichiarato e' un envelope — il gate lo sovrascriverebbe. Il livello "
+            "'voce accesa' dev'essere uno scalare; per un profilo di volume "
+            "proprio usa 'n' scalare e scrivi gli envelope in 'over.base.volume'.",
+            code="spread-n-gate", prefer_value=True)
+
+
+def _gate_volume(doc: Document, spath: KeyPath) -> Tuple[Any, KeyPath]:
+    """Il livello 'voce accesa' del gate e dov'e' scritto: il ``base.volume``
+    della entry se la entry lo dichiara, altrimenti quello del documento
+    (runtime ``_plan_entry``, che riceve ``base_volume`` da ``resolve_streams``)."""
+    entry_base = doc.get(spath[:-1] + ("base",))
+    if isinstance(entry_base, dict) and "volume" in entry_base:
+        return entry_base["volume"], spath[:-1] + ("base", "volume")
+    return doc.get(("base", "volume")), ("base", "volume")
+
+
+def _is_gate_level(doc: Document, volume: Any, vkp: KeyPath) -> bool:
+    """True se ``volume`` regge come livello scalare del gate. Assente vale 0
+    dB. Un nodo-expr si giudica dal risultato — il runtime lo vede gia'
+    risolto (``apply_document_let`` gira prima di ``expand_spreads``) — e se
+    non risolve staticamente si tace, come altrove."""
+    if volume is None or _num(volume) is not None:
+        return True
+    if not exprlang.is_expr_node(volume):
+        return False
+    try:
+        text, let = exprlang.parse_expr_node(volume)
+        out = exprlang.eval_expr(text, {**_ancestor_knob_bindings(doc, vkp), **let})
+    except ValueError:
+        return True
+    return _num(out) is not None
 
 
 _LET_BAND_KEYS = frozenset({"base", "range", "seed", "distribution", "drift"})
@@ -1570,27 +1671,30 @@ def _unreferenced(bag: Bag, path: KeyPath, var: str, where: str) -> None:
 
 
 def _check_compact_knob(bag: Bag, path: KeyPath, spec: Any, label: str) -> None:
-    """Forma compatta a cicli come valore di ``let:`` — i due vincoli propri
-    dello studio (runtime ``value_generators.expand_compact``).
+    """Forma compatta a cicli — i due vincoli propri dello studio (runtime
+    ``value_generators.expand_compact``).
 
-    ``end_time`` dev'essere 1: in un ``let:`` l'Env vive sul tempo normalizzato
-    dello stream, non sui secondi, e un ``end_time`` in secondi produce
-    breakpoint tutti oltre il bordo che il runtime appiattisce in hold **senza
-    errore** — il tipo peggiore. I punti del pattern devono essere coppie
-    ``[x%, y]``: il tipo d'interpolazione per-punto (3-tuple dell'engine) non ha
-    rappresentazione nelle forme statiche di Env di studio, dove ``type`` e'
-    globale. In piu' un warning sulle ``x%`` fuori scala, gemello di
-    ``band-time`` ma su [0, 100]."""
+    Vale ovunque il runtime attraversi la seam ``expand_env``: le manopole di
+    ``let:``, ma anche ogni Env di banda e di camminata (``base``/``range``/
+    ``drift.step``) che passa da ``expand_params``. Non e' una regola del
+    ``let:``, e' una regola della forma.
+
+    ``end_time`` dev'essere 1: l'Env vive su un asse normalizzato in [0, 1], non
+    sui secondi, e un ``end_time`` in secondi produce breakpoint tutti oltre il
+    bordo che il runtime appiattisce in hold **senza errore** — il tipo
+    peggiore. I punti del pattern devono essere coppie ``[x%, y]``: il tipo
+    d'interpolazione per-punto (3-tuple dell'engine) non ha rappresentazione
+    nelle forme statiche di Env di studio, dove ``type`` e' globale. In piu' un
+    warning sulle ``x%`` fuori scala, gemello di ``band-time`` ma su [0, 100]."""
     if not is_compact_env(spec):
         return
     if _num(spec[1]) != 1:
         bag.add(path + (1,),
                 f"{label}: forma compatta, 'end_time' deve essere 1 (ricevuto "
-                f"{_num(spec[1]):g}) — dentro un let l'Env vive sul tempo "
-                "normalizzato dello stream, non in secondi (i breakpoint "
-                "cadrebbero tutti oltre il bordo, appiattiti in hold senza "
-                "errore).",
-                code="let-compact-end-time", prefer_value=True,
+                f"{_num(spec[1]):g}) — l'Env vive su un asse normalizzato in "
+                "[0, 1], non in secondi (i breakpoint cadrebbero tutti oltre il "
+                "bordo, appiattiti in hold senza errore).",
+                code="compact-end-time", prefer_value=True,
                 data={"fix": {"kind": "rename-value", "new": "1"}})
     for i, p in enumerate(spec[0]):
         if len(p) != 2:
@@ -1599,14 +1703,14 @@ def _check_compact_knob(bag: Bag, path: KeyPath, spec: Any, label: str) -> None:
                     f"essere coppie [x%, y] (ricevuto {list(p)!r}) — il tipo "
                     "per-punto non esiste in un Env di studio, usa 'type' "
                     "globale (quarto elemento della forma compatta).",
-                    code="let-compact-point", prefer_value=True)
+                    code="compact-point", prefer_value=True)
             continue
         x = _num(p[0])
         if x is not None and not (0 <= x <= 100):
             bag.add(path + (0, i, 0),
                     f"{label}: forma compatta, x={x:g} fuori da [0, 100] (le X "
                     "del pattern sono percentuali del ciclo).",
-                    types.DiagnosticSeverity.Warning, code="let-compact-x",
+                    types.DiagnosticSeverity.Warning, code="compact-x",
                     prefer_value=True)
 
 

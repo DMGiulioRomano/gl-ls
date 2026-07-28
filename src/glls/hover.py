@@ -167,6 +167,13 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
     if str(name) == "duration" and ctx == "root":
         text += ("\n\nCode action disponibile dopo una modifica: *riscala i "
                  "breakpoint assoluti degli envelope al nuovo valore*.")
+    # la forma compatta a cicli non e' un fatto del ``let:``: vale in ogni Env
+    # che passa da ``expand_params`` (base/range di banda e camminata, drift.step),
+    # e li' la legenda dei posizionali serve quanto sopra una manopola
+    compact = compact_summary(doc.get(path))
+    if compact is not None:
+        text += (f"\n\nValore in **forma compatta a cicli** — {compact}.\n\n"
+                 + schema.COMPACT_ENV_DOC)
     return _md(text, rng)
 
 

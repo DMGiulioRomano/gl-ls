@@ -211,6 +211,17 @@ def _complete_key(doc: yamlpos.Document, m: StudyModel,
                 items.append(_item(label, doc_md, types.CompletionItemKind.Reference,
                                    snippet=snip, sort="3"))
     elif ctx == "spread":
+        # 'n' nel tempo: la forma si scrive in fretta ma la conseguenza (il
+        # gate sul volume) non si indovina — vale uno snippet suo
+        if "n" not in present:
+            items.append(_item(
+                "n_nel_tempo",
+                "Snippet: **`n` come envelope** — le voci entrano ed escono "
+                "nel tempo.\n\n" + schema.SPREAD_N_ENV_DOC,
+                types.CompletionItemKind.Class,
+                snippet="n: [[0, ${1:1}], [1, ${2:4}]]",
+                sort="3",
+            ))
         # forma dotted di ``over``: ``over.<path>`` al primo livello, dopo le
         # chiavi letterali (equivale a ``over:`` annidato)
         for label, snip, doc_md in _over_dotted_terminals(m):

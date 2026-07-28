@@ -115,16 +115,17 @@ _LET_DOC_GROUP = (
 # la sintassi e' posizionale, quindi la doc va letta come una legenda.
 COMPACT_ENV_DOC = (
     "**Forma compatta a cicli** — `[pattern, end_time, n_reps, interp?, "
-    "time_dist?, wrap?]`, la sintassi loop dell'engine ammessa anche come "
-    "valore di `let:`. Il `pattern` e' una lista di coppie `[x%, y]` con la X "
+    "time_dist?, wrap?]`, la sintassi loop dell'engine ammessa dovunque lo "
+    "studio accetti un Env: valore di `let:`, `base`/`range` di banda e "
+    "camminata, `drift.step`. Il `pattern` e' una lista di coppie `[x%, y]` con la X "
     "in **percentuale del ciclo**; il ciclo si ripete `n_reps` volte sull'arco "
     "e si espande in breakpoint alla risoluzione delle manopole (a valle e' un "
     "Env statico come ogni altro). E' l'unico modo di scrivere un ventaglio "
     "**asimmetrico** ripetuto — vertice al 25%, rientro lento — che `values:` "
     "non sa dare (tempi equispaziati per costruzione).\n\n"
-    "Dentro un `let:` valgono due vincoli propri dello studio:\n"
-    "- **`end_time` deve essere `1`**: l'Env vive sul tempo *normalizzato* "
-    "dello stream, non in secondi (un `end_time` in secondi mette i breakpoint "
+    "Valgono due vincoli propri dello studio, in ogni posizione:\n"
+    "- **`end_time` deve essere `1`**: l'Env vive su un asse *normalizzato* in "
+    "[0, 1], non in secondi (un `end_time` in secondi mette i breakpoint "
     "tutti oltre il bordo, appiattiti in hold **senza errore**);\n"
     "- i punti del pattern devono essere **coppie**: il tipo per-punto "
     "(3-tuple dell'engine) non esiste in un Env di studio, dove `type` e' "
@@ -134,6 +135,27 @@ COMPACT_ENV_DOC = (
     "`power`, o dict `{type, ...}`; `wrap` = booleano. Il quinto elemento "
     "`null` esiste solo per raggiungere il sesto."
 )
+# ``spread.n`` come Env: il coro cresce e cala nel tempo. Il pezzo che sorprende
+# non e' la sintassi ma la conseguenza sul volume, quindi la doc la dice subito.
+SPREAD_N_ENV_DOC = (
+    "**`n` come envelope** — oltre a scalare e nodo-expr, `n` accetta un Env "
+    "(`[[t, n], ...]`, `[a, b]`, `{type, points, curve}`): il numero di voci "
+    "*udibili* varia nel tempo dentro la singola versione.\n\n"
+    "Uno stream engine e' statico, il loro numero non puo' cambiare in corsa: "
+    "le voci si generano **tutte fino al picco** di `n(t)` (arrotondato in su "
+    "— ed e' il picco che deve coincidere coi conteggi posseduti da `over`) e "
+    "un gate su `base.volume` le accende e spegne:\n\n"
+    "    gain(voce i) = clamp(n(t) - i, 0, 1)\n\n"
+    "La curva la decide l'interpolazione dell'Env: `type: step` le accende di "
+    "scatto, la rampa le fa entrare sfumando.\n\n"
+    "Di conseguenza il `volume` di quelle voci e' **generato**, non e' piu' "
+    "quello scritto nel documento. Il livello «voce accesa» e' il `volume` "
+    "scalare della entry, o in mancanza quello di `base:` del documento: un "
+    "`volume` gia' envelope, o un `over.base.volume` dichiarato insieme al "
+    "gate, sono **errore** (si sovrascriverebbero). Per un profilo di volume "
+    "proprio, usa `n` scalare e scrivi gli envelope in `over.base.volume`."
+)
+
 _LET_DOC_SPREAD = (
     "**Manopole di voce.** Blocco `let:` dentro `spread:`, accanto a `n`/`over`: "
     "un valore pescato/derivato per stream generato. Solo `expr` (con `i`/`n`) e "
@@ -480,7 +502,7 @@ _STREAM_OVERRIDE_KEYS = [
 _SPREAD_KEYS = [
     _k("n", "Quanti stream generare. Se una strategy possiede il conteggio "
             "(values/ramp piena/banda con n) deve **coincidere**; se omesso lo "
-            "definisce l'unico conteggio posseduto."),
+            "definisce l'unico conteggio posseduto.\n\n" + SPREAD_N_ENV_DOC),
     _k("over", "`{path puntato: strategy}` — i valori si appaiano **per "
                "indice** tra i path (niente prodotto cartesiano). Ammessa "
                "anche la forma dotted `over.<path>: ...` al primo livello."),
