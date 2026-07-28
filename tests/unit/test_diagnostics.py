@@ -700,6 +700,25 @@ def test_stream_level_rng_group_in_base_is_known():
     assert "unknown-key" not in codes(text)
 
 
+def test_rng_group_scalar_is_clean():
+    # un numero e' un'identita' legittima (gruppi numerati)
+    text = BASE.replace("base:\n", "base:\n  rng_group: 3\n")
+    assert "rng-group-type" not in codes(text)
+
+
+def test_rng_group_list_is_flagged():
+    # rng_group non e' un parametro sintetizzabile: una lista finirebbe
+    # all'engine come identita' "['a', 'b']", silenziosamente.
+    text = BASE.replace("base:\n", "base:\n  rng_group: [a, b]\n")
+    assert "rng-group-type" in codes(text)
+
+
+def test_rng_group_generator_dict_is_flagged():
+    # tentativo di trattarlo come un Env/generatore di studio
+    text = BASE.replace("base:\n", "base:\n  rng_group: {values: [a, b]}\n")
+    assert "rng-group-type" in codes(text)
+
+
 def test_expr_in_spread_uses_containing_stream_n():
     # due entry-spread: l'expr vive nella seconda (n=5); 1/(n-5) deve dare
     # divisione per zero con n=5, non passare pulito con la n=3 della prima.

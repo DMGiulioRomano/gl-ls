@@ -1213,6 +1213,14 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
         bag.add(bpath + ("time_mode",),
                 f"time_mode '{tm}' non valido (absolute | normalized).",
                 code="bad-enum", prefer_value=True)
+    rng_group = base.get("rng_group")
+    if isinstance(rng_group, (list, dict)):
+        bag.add(bpath + ("rng_group",),
+                "rng_group e' un'identita' testuale (PGE #169), non un "
+                "parametro sintetizzabile: liste e generatori non sono "
+                "ammessi — l'engine ne userebbe la resa testuale come nome "
+                "del gruppo.",
+                code="rng-group-type", prefer_value=True)
     pitch = base.get("pitch")
     if isinstance(pitch, dict):
         units = [k for k in ("semitones", "quarter_tone", "eighth_tone", "cents",
