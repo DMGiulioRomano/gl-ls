@@ -200,6 +200,15 @@ _ENGINE_STREAM_KEYS = [
     _k("voices", "Multi-voice: num_voices, scatter, pitch, onset_offset, "
                  "pointer, pan (strategy per dimensione)."),
     _k("seed", "Seed per-stream (override del seed globale engine)."),
+    _k("rng_group", "**Identita' RNG condivisa fra stream** (PGE #169, stringa). "
+                    "Stream con lo stesso gruppo — e stessi parametri stocastici — "
+                    "pescano le stesse sequenze pseudo-casuali (variazioni `_range`, "
+                    "gate, iot, window, detune, voci stocastiche): i cugini di uno "
+                    "spread diventano un oggetto verticale coerente. Assente "
+                    "(default): identita' = `stream_id`, isolamento per-stream. "
+                    "Richiede `seed:` engine per la riproducibilita' fra run. "
+                    "Limite: con `density`/`distribution` diverse le griglie IOT si "
+                    "desincronizzano pur condividendo l'RNG.", kind="string"),
     _k("solo", "Solo gli stream con questo flag vengono renderizzati."),
     _k("mute", "Stream ignorato (salvo solo mode). In stack e' il gate "
                "d'ascolto: si esclude uno stream mutandolo col volume."),

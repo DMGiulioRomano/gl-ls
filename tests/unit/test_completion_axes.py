@@ -73,3 +73,23 @@ def test_gain_compensation_alpha_hover_documented():
     m = model.build(doc)
     h = hover.hover(doc, m, 1, 3)
     assert h is not None and "alpha" in h.contents.value
+
+
+# --- rng_group (PGE #169): superficie engine dentro base: --------------
+
+
+def test_base_key_completion_offers_rng_group():
+    text = "base:\n  onset: 0\n  \n"
+    labels = {i.label for i in _items(text, 2, 2)}
+    assert "rng_group" in labels
+
+
+def test_rng_group_hover_documented():
+    from glls import hover
+    text = "base:\n  rng_group: cugini\n"
+    doc = yamlpos.parse(text)
+    m = model.build(doc)
+    h = hover.hover(doc, m, 1, 4)
+    assert h is not None and "rng_group" in h.contents.value
+    # semantica: sequenze RNG condivise, default stream_id
+    assert "stream_id" in h.contents.value

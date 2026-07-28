@@ -693,6 +693,13 @@ def test_stream_level_seed_in_base_is_known():
     assert "unknown-key" not in codes(text)
 
 
+def test_stream_level_rng_group_in_base_is_known():
+    # rng_group (PGE #169): identita' RNG condivisa fra stream; passa
+    # all'engine verbatim via base, ereditata dai cugini dello spread.
+    text = BASE.replace("base:\n", "base:\n  rng_group: cugini\n")
+    assert "unknown-key" not in codes(text)
+
+
 def test_expr_in_spread_uses_containing_stream_n():
     # due entry-spread: l'expr vive nella seconda (n=5); 1/(n-5) deve dare
     # divisione per zero con n=5, non passare pulito con la n=3 della prima.
