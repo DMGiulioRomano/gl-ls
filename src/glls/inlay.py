@@ -14,7 +14,7 @@ from lsprotocol import types
 
 from . import engine_info as EI
 from .convert import as_num as _num, fmt_num
-from .model import STACK_RESERVED, StudyModel
+from .model import STACK_RESERVED, StudyModel, compact_summary, in_spread_let
 from .yamlpos import Document, KeyPath
 
 MAX_HINTS = 60
@@ -99,6 +99,19 @@ def hints(doc: Document, m: StudyModel, start_line: int, end_line: int
                     continue
                 out.append(_hint(vs.end_line, vs.end_col,
                                  f"→{fmt_num(round(t * dur, 3))}s"))
+
+    # 4) forma compatta a cicli: cosa produce, senza espanderla a mente
+    for entry in doc.iter_entries():
+        if len(out) >= MAX_HINTS:
+            break
+        if entry.kind != "sequence" or in_spread_let(entry.path):
+            continue
+        label = compact_summary(doc.get(entry.path))
+        if label is None:
+            continue
+        vs = entry.value_span
+        if start_line <= vs.end_line <= end_line:
+            out.append(_hint(vs.end_line, vs.end_col, label))
     return out
 
 

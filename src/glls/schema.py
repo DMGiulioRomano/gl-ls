@@ -99,20 +99,47 @@ _LET_DOC_DOCUMENT = (
     "`base:`/`axes:`/`stack:`/`versions:`: nomi in scope su tutto il documento "
     "(ogni gruppo e voce li vede). Valori ammessi: scalare, envelope disegnato "
     "`[[t, v], ...]`, banda/`ramp`/`values` (compilati in envelope una volta), "
-    "nodo-expr derivato che referenzia altre manopole. Una manopola non "
+    "**forma compatta a cicli** `[pattern, 1, n_reps, ...]`, nodo-expr derivato "
+    "che referenzia altre manopole. Una manopola non "
     "referenziata da nessuna espressione e' un errore; un gruppo/una voce non "
     "puo' ridichiararne il nome (ombreggiamento)."
 )
 _LET_DOC_GROUP = (
     "**Manopole di gruppo.** Blocco `let:` in una entry di `streams:`: nomi in "
     "scope per lo stream (e per il suo `spread.let`). Stessi valori del `let:` "
-    "di documento; non puo' ridichiarare un nome gia' definito nel `let:` di "
+    "di documento (inclusa la **forma compatta a cicli**); non puo' "
+    "ridichiarare un nome gia' definito nel `let:` di "
     "documento. Due gruppi diversi possono usare lo stesso nome (fratelli)."
+)
+# Forma compatta a cicli dell'engine (``yaml.md`` §5) come valore di ``let:``:
+# la sintassi e' posizionale, quindi la doc va letta come una legenda.
+COMPACT_ENV_DOC = (
+    "**Forma compatta a cicli** — `[pattern, end_time, n_reps, interp?, "
+    "time_dist?, wrap?]`, la sintassi loop dell'engine ammessa anche come "
+    "valore di `let:`. Il `pattern` e' una lista di coppie `[x%, y]` con la X "
+    "in **percentuale del ciclo**; il ciclo si ripete `n_reps` volte sull'arco "
+    "e si espande in breakpoint alla risoluzione delle manopole (a valle e' un "
+    "Env statico come ogni altro). E' l'unico modo di scrivere un ventaglio "
+    "**asimmetrico** ripetuto — vertice al 25%, rientro lento — che `values:` "
+    "non sa dare (tempi equispaziati per costruzione).\n\n"
+    "Dentro un `let:` valgono due vincoli propri dello studio:\n"
+    "- **`end_time` deve essere `1`**: l'Env vive sul tempo *normalizzato* "
+    "dello stream, non in secondi (un `end_time` in secondi mette i breakpoint "
+    "tutti oltre il bordo, appiattiti in hold **senza errore**);\n"
+    "- i punti del pattern devono essere **coppie**: il tipo per-punto "
+    "(3-tuple dell'engine) non esiste in un Env di studio, dove `type` e' "
+    "globale — e' il quarto elemento posizionale.\n\n"
+    "Posizionali: `interp` = `linear` | `cubic` | `step`; `time_dist` = "
+    "`linear`, `exponential`/`exp`, `logarithmic`/`log`, `geometric`/`geo`, "
+    "`power`, o dict `{type, ...}`; `wrap` = booleano. Il quinto elemento "
+    "`null` esiste solo per raggiungere il sesto."
 )
 _LET_DOC_SPREAD = (
     "**Manopole di voce.** Blocco `let:` dentro `spread:`, accanto a `n`/`over`: "
     "un valore pescato/derivato per stream generato. Solo `expr` (con `i`/`n`) e "
-    "banda; `values`/`ramp` sono errore (conteggio ridondante con `over`). Non "
+    "banda; `values`/`ramp` sono errore (conteggio ridondante con `over`), e la "
+    "**forma compatta a cicli** non vale qui (la risolve il `let:` di documento "
+    "o di gruppo). Non "
     "puo' ridichiarare un nome del `let:` di gruppo o documento, ne' omonimo di "
     "una variabile di `versions:`."
 )

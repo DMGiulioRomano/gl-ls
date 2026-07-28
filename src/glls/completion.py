@@ -219,6 +219,18 @@ def _complete_key(doc: yamlpos.Document, m: StudyModel,
                 items.append(_item(dotted, doc_md + " (Forma dotted di `over`.)",
                                    types.CompletionItemKind.Reference,
                                    snippet="over." + snip, sort="4"))
+    elif ctx == "let":
+        # i nomi delle manopole sono liberi: l'unica cosa da proporre e' la
+        # forma del valore piu' difficile da scrivere a memoria (posizionale)
+        items.append(_item(
+            "manopola_ciclica",
+            "Snippet: **forma compatta a cicli** come valore di manopola "
+            "(ventaglio asimmetrico ripetuto).\n\n" + schema.COMPACT_ENV_DOC,
+            types.CompletionItemKind.Class,
+            snippet="${1:s}: [[[0, ${2:0}], [${3:25}, ${4:1}]], 1, ${5:4}, "
+                    "'${6|linear,cubic,step|}', null, ${7|true,false|}]",
+            sort="3",
+        ))
     elif ctx == "streams":
         items.append(_item(
             "ventaglio",

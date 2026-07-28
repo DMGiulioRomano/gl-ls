@@ -33,6 +33,10 @@ Language server (LSP) per il **linguaggio di granulazione** degli
   referenziata da nessuna espressione, `values`/`ramp` in `spread.let`, nomi in
   scope delle expr risolti anche sulle manopole; collisione fra `spread.let` e
   le variabili di `versions:`;
+- **forma compatta a cicli** come valore di `let:` (`[pattern, 1, n_reps, ...]`,
+  il ventaglio asimmetrico ripetuto): `end_time` diverso da 1 — che a runtime
+  finisce in hold silenzioso — e punti del pattern a 3 elementi sono errore
+  (`type` e' globale), `x%` fuori da [0, 100] e' un warning;
 - **`versions:` ad assi ortogonali**: discriminatore Forma 1 (manopole
   co-varianti) / Forma 2 (stati nominati) e segnalazione degli assi misti;
 - guardia anti-runaway: stima dei breakpoint della camminata-X (> 10000 = errore
@@ -44,13 +48,14 @@ Language server (LSP) per il **linguaggio di granulazione** degli
 walk, spread, superficie engine dentro `base:`), valori enum (finestre,
 interpolation, unit, mode...), nomi d'asse dentro `stack:` e `orderings`,
 path engine per `path:`, path puntati per `spread.over`, file audio per
-`sample:`, snippet (nuovo asse, camminata, entry-spread). Funziona anche a
-documento sintatticamente rotto (inferenza dall'indentazione).
+`sample:`, snippet (nuovo asse, camminata, entry-spread, manopola a cicli).
+Funziona anche a documento sintatticamente rotto (inferenza dall'indentazione).
 
 **Hover** — documentazione di ogni chiave del DSL; bounds/default/unita' dei
 parametri engine; **zona percettiva della density** (ritmo / flutter / banda
 audio, dal continuum di Truax); conversioni hz/s/bpm sui valori della
-camminata; riepilogo dell'asse (generatore, n, strategy-X, unit risolta).
+camminata; riepilogo dell'asse (generatore, n, strategy-X, unit risolta);
+legenda dei posizionali di una manopola in forma compatta a cicli.
 
 **Ricalcoli (code action)** — il cuore:
 
@@ -68,8 +73,9 @@ camminata; riepilogo dell'asse (generatore, n, strategy-X, unit risolta).
 
 **E ancora**: semantic tokens (sezioni, nomi d'asse, marcatori di banda, enum,
 espressioni expr tokenizzate); outline del documento; **inlay hint** con la
-banda convertita nell'altra unita' e il **duty factor** (`density ×
-grain.duration`); **code lens** con le varianti sweep per ordine, la durata
+banda convertita nell'altra unita', il **duty factor** (`density ×
+grain.duration`) e il riassunto di una forma compatta (`4 cicli · vertice 25% ·
+wrap`); **code lens** con le varianti sweep per ordine, la durata
 stimata, i breakpoint stimati d'ogni camminata e gli stream generati da ogni
 spread; go-to-definition/references sui nomi d'asse; link ai sample.
 
