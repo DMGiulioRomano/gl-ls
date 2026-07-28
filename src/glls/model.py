@@ -231,6 +231,60 @@ def expand_over_items(
     return out
 
 
+def is_compact_env(spec: Any) -> bool:
+    """True se ``spec`` e' la forma compatta a cicli dell'engine.
+
+    ``[pattern, end_time, n_reps, interp?, time_dist?, wrap?]`` — il predicato
+    e' quello del runtime (granstudies ``value_generators.is_compact_env``): si
+    riconosce dai primi tre elementi (lista non vuota di liste, numero, intero).
+    Non collide con le forme statiche di Env: ``[[t, y], ...]`` ha una lista in
+    posizione 1, lo shorthand ``[a, b]`` ha due soli scalari.
+    """
+    return (
+        isinstance(spec, (list, tuple))
+        and 3 <= len(spec) <= 6
+        and isinstance(spec[0], (list, tuple))
+        and len(spec[0]) > 0
+        and all(isinstance(p, (list, tuple)) for p in spec[0])
+        and isinstance(spec[1], (int, float))
+        and not isinstance(spec[1], bool)
+        and isinstance(spec[2], int)
+        and not isinstance(spec[2], bool)
+    )
+
+
+def in_spread_let(path: KeyPath) -> bool:
+    """True se ``path`` vive dentro un blocco ``spread.let`` (manopole di voce).
+
+    La forma compatta a cicli la risolve ``resolve_knobs`` — documento e gruppo;
+    ``spread.let`` ha un resolver suo (banda per voce / expr su ``i``/``n``) che
+    non la conosce, quindi li' non va ne' riassunta ne' annotata."""
+    return any(seg == "spread" and i + 1 < len(path) and path[i + 1] == "let"
+               for i, seg in enumerate(path))
+
+
+def compact_summary(spec: Any) -> Optional[str]:
+    """Riassunto leggibile di una forma compatta: cicli, vertice, wrap.
+
+    ``4 cicli · vertice 25% · wrap`` — il vertice e' la ``x%`` del punto di
+    massimo del pattern (omesso se il massimo non e' unico o il pattern ha un
+    punto solo); ``interp``/``time_dist`` no, si leggono gia' nel testo a
+    fianco. None se ``spec`` non e' una forma compatta.
+    """
+    if not is_compact_env(spec):
+        return None
+    parts = [f"{spec[2]} {'ciclo' if spec[2] == 1 else 'cicli'}"]
+    pairs = [(_num(p[0]), _num(p[1])) for p in spec[0] if len(p) >= 2]
+    if len(pairs) > 1 and all(x is not None and y is not None for x, y in pairs):
+        ys = [y for _x, y in pairs]
+        top = max(ys)
+        if ys.count(top) == 1:
+            parts.append(f"vertice {pairs[ys.index(top)][0]:g}%")
+    if len(spec) >= 6 and spec[5] is True:
+        parts.append("wrap")
+    return " · ".join(parts)
+
+
 def _is_expr_node(spec: Any) -> bool:
     return isinstance(spec, dict) and "expr" in spec
 
