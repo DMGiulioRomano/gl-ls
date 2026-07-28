@@ -6,6 +6,9 @@ il riconoscimento (che non collide con le forme statiche di Env), i due
 vincoli propri dello studio (``end_time`` = 1, punti a coppie), il warning
 sulle ``x%`` fuori scala e le feature d'appoggio: hover, inlay, semantic token
 dei posizionali, snippet di completamento.
+
+Gli stessi vincoli fuori da ``let:`` (bande di asse, camminata-X, ``drift.step``)
+stanno in ``test_compact_env_bande.py``.
 """
 from lsprotocol import types
 
@@ -63,7 +66,7 @@ def test_envelope_disegnato_resta_pulito():
 
 
 def test_end_time_in_secondi_e_errore():
-    assert "let-compact-end-time" in _codes("[[[0, 0], [25, 1]], 50, 4]")
+    assert "compact-end-time" in _codes("[[[0, 0], [25, 1]], 50, 4]")
 
 
 def test_end_time_errore_ha_il_quick_fix_a_1():
@@ -78,13 +81,13 @@ def test_end_time_errore_ha_il_quick_fix_a_1():
 
 
 def test_punto_del_pattern_a_tre_elementi_e_errore():
-    assert "let-compact-point" in _codes("[[[0, 0], [25, 1, 'step']], 1, 4]")
+    assert "compact-point" in _codes("[[[0, 0], [25, 1, 'step']], 1, 4]")
 
 
 def test_x_fuori_scala_e_warning():
     doc, m, _ = _doc("[[[0, 0], [125, 1]], 1, 4]")
     warns = [d for d in diagnostics.collect(doc, m)
-             if d.code == "let-compact-x"]
+             if d.code == "compact-x"]
     assert len(warns) == 1
     assert warns[0].severity == types.DiagnosticSeverity.Warning
 
@@ -98,7 +101,7 @@ def test_vincoli_valgono_anche_nel_let_di_gruppo():
     )
     doc = yamlpos.parse(text)
     codes = {d.code for d in diagnostics.collect(doc, model.build(doc))}
-    assert "let-compact-end-time" in codes
+    assert "compact-end-time" in codes
 
 
 def test_la_diagnostica_punta_allo_slot_sbagliato():

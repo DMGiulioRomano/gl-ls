@@ -33,10 +33,12 @@ Language server (LSP) per il **linguaggio di granulazione** degli
   referenziata da nessuna espressione, `values`/`ramp` in `spread.let`, nomi in
   scope delle expr risolti anche sulle manopole; collisione fra `spread.let` e
   le variabili di `versions:`;
-- **forma compatta a cicli** come valore di `let:` (`[pattern, 1, n_reps, ...]`,
-  il ventaglio asimmetrico ripetuto): `end_time` diverso da 1 — che a runtime
-  finisce in hold silenzioso — e punti del pattern a 3 elementi sono errore
-  (`type` e' globale), `x%` fuori da [0, 100] e' un warning;
+- **forma compatta a cicli** (`[pattern, 1, n_reps, ...]`, il ventaglio
+  asimmetrico ripetuto), ovunque il runtime la espanda: valore di `let:`, ma
+  anche `base`/`range` di banda e camminata e `drift.step`. `end_time` diverso
+  da 1 — che a runtime finisce in hold silenzioso — e punti del pattern a 3
+  elementi sono errore (`type` e' globale), `x%` fuori da [0, 100] e' un
+  warning;
 - **`versions:` ad assi ortogonali**: discriminatore Forma 1 (manopole
   co-varianti) / Forma 2 (stati nominati) e segnalazione degli assi misti;
 - guardia anti-runaway: stima dei breakpoint della camminata-X (> 10000 = errore

@@ -403,7 +403,11 @@ def _check_band(bag: Bag, doc: Document, path: KeyPath, cfg: Dict[str, Any],
     posizione nel documento; il default e' ``path + subkeys`` (banda annidata
     canonica). Nello spread con chiavi puntate una banda vive su piu' righe
     (``.base``/``.range``/``.seed``): il locator punta ogni diagnostica alla
-    riga giusta."""
+    riga giusta.
+
+    Gli Env della banda (``base``/``range``/``drift.step``) passano tutti dalla
+    seam ``expand_params`` del runtime, quindi qui valgono anche i vincoli della
+    forma compatta a cicli — non solo dentro ``let:`` (issue #29)."""
     if locate is None:
         def locate(*ks: Any) -> KeyPath:
             return path + tuple(ks)
@@ -440,8 +444,12 @@ def _check_band(bag: Bag, doc: Document, path: KeyPath, cfg: Dict[str, Any],
                 bag.add(locate("drift", "step"),
                         f"{label}: drift.step negativo — 0 congela, > 0 cammina.",
                         code="drift-step", prefer_value=True)
+            _check_compact_knob(bag, locate("drift", "step"), drift.get("step"),
+                                f"{label} drift.step")
     for border in ("base", "range"):
         _check_env_times(bag, locate(border), cfg.get(border), label)
+        _check_compact_knob(bag, locate(border), cfg.get(border),
+                            f"{label} {border}")
 
 
 def _check_env_times(bag: Bag, path: KeyPath, form: Any, label: str) -> None:
@@ -1570,27 +1578,30 @@ def _unreferenced(bag: Bag, path: KeyPath, var: str, where: str) -> None:
 
 
 def _check_compact_knob(bag: Bag, path: KeyPath, spec: Any, label: str) -> None:
-    """Forma compatta a cicli come valore di ``let:`` — i due vincoli propri
-    dello studio (runtime ``value_generators.expand_compact``).
+    """Forma compatta a cicli — i due vincoli propri dello studio (runtime
+    ``value_generators.expand_compact``).
 
-    ``end_time`` dev'essere 1: in un ``let:`` l'Env vive sul tempo normalizzato
-    dello stream, non sui secondi, e un ``end_time`` in secondi produce
-    breakpoint tutti oltre il bordo che il runtime appiattisce in hold **senza
-    errore** — il tipo peggiore. I punti del pattern devono essere coppie
-    ``[x%, y]``: il tipo d'interpolazione per-punto (3-tuple dell'engine) non ha
-    rappresentazione nelle forme statiche di Env di studio, dove ``type`` e'
-    globale. In piu' un warning sulle ``x%`` fuori scala, gemello di
-    ``band-time`` ma su [0, 100]."""
+    Vale ovunque il runtime attraversi la seam ``expand_env``: le manopole di
+    ``let:``, ma anche ogni Env di banda e di camminata (``base``/``range``/
+    ``drift.step``) che passa da ``expand_params``. Non e' una regola del
+    ``let:``, e' una regola della forma.
+
+    ``end_time`` dev'essere 1: l'Env vive su un asse normalizzato in [0, 1], non
+    sui secondi, e un ``end_time`` in secondi produce breakpoint tutti oltre il
+    bordo che il runtime appiattisce in hold **senza errore** — il tipo
+    peggiore. I punti del pattern devono essere coppie ``[x%, y]``: il tipo
+    d'interpolazione per-punto (3-tuple dell'engine) non ha rappresentazione
+    nelle forme statiche di Env di studio, dove ``type`` e' globale. In piu' un
+    warning sulle ``x%`` fuori scala, gemello di ``band-time`` ma su [0, 100]."""
     if not is_compact_env(spec):
         return
     if _num(spec[1]) != 1:
         bag.add(path + (1,),
                 f"{label}: forma compatta, 'end_time' deve essere 1 (ricevuto "
-                f"{_num(spec[1]):g}) — dentro un let l'Env vive sul tempo "
-                "normalizzato dello stream, non in secondi (i breakpoint "
-                "cadrebbero tutti oltre il bordo, appiattiti in hold senza "
-                "errore).",
-                code="let-compact-end-time", prefer_value=True,
+                f"{_num(spec[1]):g}) — l'Env vive su un asse normalizzato in "
+                "[0, 1], non in secondi (i breakpoint cadrebbero tutti oltre il "
+                "bordo, appiattiti in hold senza errore).",
+                code="compact-end-time", prefer_value=True,
                 data={"fix": {"kind": "rename-value", "new": "1"}})
     for i, p in enumerate(spec[0]):
         if len(p) != 2:
@@ -1599,14 +1610,14 @@ def _check_compact_knob(bag: Bag, path: KeyPath, spec: Any, label: str) -> None:
                     f"essere coppie [x%, y] (ricevuto {list(p)!r}) — il tipo "
                     "per-punto non esiste in un Env di studio, usa 'type' "
                     "globale (quarto elemento della forma compatta).",
-                    code="let-compact-point", prefer_value=True)
+                    code="compact-point", prefer_value=True)
             continue
         x = _num(p[0])
         if x is not None and not (0 <= x <= 100):
             bag.add(path + (0, i, 0),
                     f"{label}: forma compatta, x={x:g} fuori da [0, 100] (le X "
                     "del pattern sono percentuali del ciclo).",
-                    types.DiagnosticSeverity.Warning, code="let-compact-x",
+                    types.DiagnosticSeverity.Warning, code="compact-x",
                     prefer_value=True)
 
 
