@@ -142,33 +142,47 @@ def _check_root(bag: Bag, doc: Document, m: StudyModel) -> None:
 
 
 
-# Parametri che l'engine riscala da campioni a secondi (fattore 1/output_sr)
-# quando ``grain.duration_unit: samples`` (``stream._pre_normalize_grain_params``).
-_SAMPLES_SCALED = frozenset({"grain.duration", "grain.duration_range"})
+# Parametri che l'engine riscala verso i secondi quando ``grain.duration_unit``
+# e' dichiarata (``stream._pre_normalize_grain_params``): il fattore dipende
+# dall'unita' — 1/output_sr per ``samples``, 1e-3 per ``milliseconds``.
+_UNIT_SCALED = frozenset({"grain.duration", "grain.duration_range"})
 
 
-def _samples_unit(doc: Document, bpath: KeyPath) -> bool:
-    """True se il blocco engine ``bpath`` lavora in campioni: vale l'override
-    per-stream se dichiarato, altrimenti l'unita' ereditata dal base root
-    (semantica del deep-merge stream su documento)."""
+def _grain_unit(doc: Document, bpath: KeyPath) -> Optional[str]:
+    """``grain.duration_unit`` che vale per il blocco engine ``bpath``, o None
+    se il blocco lavora in secondi.
+
+    Vale l'override per-stream se dichiarato, altrimenti l'unita' ereditata dal
+    base root (semantica del deep-merge stream su documento). ``seconds``
+    esplicito collassa su None: e' il default, non un'unita' da convertire.
+    Un'unita' fuori vocabolario collassa su None a sua volta — la segnala
+    ``bad-duration-unit``, e senza un fattore noto leggere i valori come
+    secondi e' l'unica lettura onesta."""
     u = doc.get(bpath + ("grain", "duration_unit"))
     if u is None and bpath != ("base",):
         u = doc.get(("base", "grain", "duration_unit"))
-    return u == "samples"
+    if not isinstance(u, str) or u == "seconds" or u not in EI.DURATION_UNITS:
+        return None
+    return u
 
 
 def _check_bounds_value(
     bag: Bag, path: KeyPath, engine_path: str, v: Any, label: str,
-    in_samples: bool = False,
+    grain_unit: Optional[str] = None,
 ) -> None:
+    """Confronto coi bounds engine, che vivono in **secondi**.
+
+    ``grain_unit`` e' l'unita' dichiarata dal blocco (``samples`` |
+    ``milliseconds``): sui path che l'engine riscala il valore va portato in
+    secondi prima del confronto, e il messaggio porta entrambi i numeri."""
     b = EI.bounds_for(engine_path)
     n = _num(v)
     if b is None or n is None:
         return
     note = ""
-    if in_samples and engine_path in _SAMPLES_SCALED:
-        note = f" ({n:g} campioni a {EI.OUTPUT_SR} Hz)"
-        n = n / EI.OUTPUT_SR
+    if grain_unit is not None and engine_path in _UNIT_SCALED:
+        note = EI.unit_note(n, grain_unit)
+        n = n * EI.grain_duration_factor(grain_unit)
     lo, hi = b
     if (lo is not None and n < lo) or (hi is not None and n > hi):
         hi_s = "∞" if hi is None else f"{hi:g}"
@@ -380,11 +394,24 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
         # quello risolto: 'path' esplicito o, se assente, la chiave dell'asse
         engine_path = cfg.get("path", name)
         if isinstance(engine_path, str):
-            in_samples = _samples_unit(doc, ("base",))
+            grain_unit = _grain_unit(doc, ("base",))
             if "baseline" in cfg:
                 _check_bounds_value(bag, apath + ("baseline",), engine_path,
                                     cfg.get("baseline"), f"Asse '{name}' baseline",
-                                    in_samples=in_samples)
+                                    grain_unit=grain_unit)
+            elif engine_path == "grain.duration" and grain_unit is not None:
+                # Il default engine (0.05) e' in secondi e non viene convertito:
+                # finirebbe a valle come 0.05 campioni / 0.05 ms, sempre sotto
+                # il bound minimo. granstudies lo ferma al parse
+                # (``study_spec._resolve_baseline``).
+                label = EI.GRAIN_UNIT_LABELS.get(grain_unit, grain_unit)
+                bag.add(apath,
+                        f"Asse '{name}': con 'grain.duration_unit: {grain_unit}' "
+                        "il 'baseline' e' obbligatorio — il default engine "
+                        f"({EI.PARAMS['grain.duration'].default:g}) e' in secondi "
+                        f"e non verrebbe convertito. Scrivilo in {label}.",
+                        code="baseline-required",
+                        data={"fix": {"kind": "add-baseline", "path": list(apath)}})
             elif EI.needs_baseline(engine_path):
                 why = ("unit-driven (pitch)" if engine_path.startswith("pitch")
                        else "senza default engine")
@@ -397,7 +424,7 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
                 for i, v in enumerate(vals):
                     _check_bounds_value(bag, apath + ("values", i), engine_path, v,
                                         f"Asse '{name}' values[{i}]",
-                                        in_samples=in_samples)
+                                        grain_unit=grain_unit)
 
 
 def _check_band(bag: Bag, doc: Document, path: KeyPath, cfg: Dict[str, Any],
@@ -1359,12 +1386,29 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
                                   "path": list(bpath + ("grain", "reverse"))}})
         axis_governs_duration = any(
             ax.path == "grain.duration" for ax in m.axes.values())
-        if (grain.get("duration_unit") == "samples" and "duration" not in grain
-                and not axis_governs_duration):
+        # Il vincolo vale per OGNI unita' non-secondi, non solo per i campioni:
+        # senza ``grain.duration`` esplicita la base resta in secondi mentre
+        # ``duration_range`` (e i valori d'asse) sono nell'unita' dichiarata.
+        declared_unit = grain.get("duration_unit")
+        if declared_unit is not None and declared_unit not in EI.DURATION_UNITS:
+            sug = (_suggest(str(declared_unit), EI.DURATION_UNITS)
+                   if isinstance(declared_unit, str) else None)
+            extra = f" Forse '{sug}'?" if sug else ""
             bag.add(bpath + ("grain", "duration_unit"),
-                    "Con duration_unit: samples la grain.duration va sempre "
-                    "indicata esplicitamente (il default 0.05 e' in secondi).",
-                    code="samples-duration")
+                    f"duration_unit '{declared_unit}' non ammessa "
+                    f"({' | '.join(EI.DURATION_UNITS)}).{extra}",
+                    code="bad-duration-unit", prefer_value=True,
+                    data={"fix": {"kind": "rename-value", "new": sug}} if sug else None)
+        if (isinstance(declared_unit, str) and declared_unit != "seconds"
+                and declared_unit in EI.DURATION_UNITS
+                and "duration" not in grain and not axis_governs_duration):
+            label = EI.GRAIN_UNIT_LABELS.get(declared_unit, declared_unit)
+            bag.add(bpath + ("grain", "duration_unit"),
+                    f"Con duration_unit: {declared_unit} la grain.duration va "
+                    "sempre indicata esplicitamente (il default "
+                    f"{EI.PARAMS['grain.duration'].default:g} e' in secondi, non "
+                    f"in {label}).",
+                    code="grain-unit-duration")
     pointer = base.get("pointer")
     if isinstance(pointer, dict):
         if "loop_end" in pointer and "loop_dur" in pointer:
@@ -1379,7 +1423,7 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
                     "cavallo della fine del file usa loop_dur.",
                     code="loop-order", prefer_value=True)
     # bounds sui parametri noti (scalari ed envelope)
-    in_samples = _samples_unit(doc, bpath)
+    grain_unit = _grain_unit(doc, bpath)
     for dotted, info in EI.PARAMS.items():
         parts = tuple(dotted.split("."))
         if parts[0] in ("onset", "duration") and len(parts) == 1:
@@ -1388,13 +1432,13 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
         if v is None:
             continue
         _check_param_bounds(bag, bpath + parts, dotted, v, m,
-                            in_samples=in_samples)
+                            grain_unit=grain_unit)
 
 
 def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
-                        m: StudyModel, in_samples: bool = False) -> None:
+                        m: StudyModel, grain_unit: Optional[str] = None) -> None:
     if _num(v) is not None:
-        _check_bounds_value(bag, path, dotted, v, dotted, in_samples=in_samples)
+        _check_bounds_value(bag, path, dotted, v, dotted, grain_unit=grain_unit)
         return
     pts: Optional[list] = None
     ppath = path
@@ -1412,7 +1456,7 @@ def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
             y = _num(p[1])
             if y is not None:
                 _check_bounds_value(bag, ppath + (i,), dotted, y,
-                                    f"{dotted} t={p[0]!r}", in_samples=in_samples)
+                                    f"{dotted} t={p[0]!r}", grain_unit=grain_unit)
             if len(p) == 3 and p[2] not in EI.INTERPOLATIONS:
                 bag.add(ppath + (i,),
                         f"{dotted}: type per-punto '{p[2]}' non valido "

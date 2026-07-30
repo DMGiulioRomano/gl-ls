@@ -345,7 +345,7 @@ def test_grain_duration_range_samples_not_flagged():
 def test_grain_duration_samples_without_duration_flagged():
     text = BASE.replace("base:\n",
                         "base:\n  grain:\n    duration_unit: samples\n")
-    assert "samples-duration" in codes(text)
+    assert "grain-unit-duration" in codes(text)
 
 
 def test_grain_duration_samples_governed_by_axis_not_flagged():
@@ -354,7 +354,98 @@ def test_grain_duration_samples_governed_by_axis_not_flagged():
     # 'duration' esplicita in base non serve.
     text = (BASE.replace("base:\n", "base:\n  grain:\n    duration_unit: samples\n")
             + "  grain.duration:\n    baseline: 512\n    values: [256, 1024]\n")
-    assert "samples-duration" not in codes(text)
+    assert "grain-unit-duration" not in codes(text)
+
+
+# --- grain.duration_unit: milliseconds (PGE v5.2.0, gl-ls #35) --------------
+
+
+def test_grain_duration_milliseconds_scalar_not_flagged():
+    # 650 ms = 0.65 s: letti come secondi sarebbero > 10 (falso positivo)
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 650\n    duration_unit: milliseconds\n")
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_grain_duration_milliseconds_real_violation_flagged():
+    # 20000 ms = 20 s: fuori bounds anche dopo la conversione
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 20000\n    duration_unit: milliseconds\n")
+    d = next(d for d in diags_of(text) if d.code == "out-of-bounds")
+    assert "ms" in d.message and "48000 Hz" not in d.message
+
+
+def test_grain_duration_range_milliseconds_not_flagged():
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 175\n    duration_range: 125\n"
+        "    duration_unit: milliseconds\n")
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_axis_baseline_milliseconds_not_flagged():
+    # la scala 50-300 ms: il baseline al centro e' valido, non 175 s
+    text = (BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 175\n    duration_unit: milliseconds\n")
+        + "  grain.duration: {baseline: 175}\n")
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_grain_duration_milliseconds_without_duration_flagged():
+    text = BASE.replace(
+        "base:\n", "base:\n  grain:\n    duration_unit: milliseconds\n")
+    d = next(d for d in diags_of(text) if d.code == "grain-unit-duration")
+    assert "milliseconds" in d.message
+
+
+def test_grain_duration_unit_seconds_explicit_not_flagged():
+    # 'seconds' e' il default: non chiede una duration esplicita
+    text = BASE.replace(
+        "base:\n", "base:\n  grain:\n    duration_unit: seconds\n")
+    assert "grain-unit-duration" not in codes(text)
+
+
+def test_axis_grain_duration_baseline_required_with_unit():
+    # senza baseline il default engine (0.05 s) finirebbe a valle come 0.05 ms
+    text = (BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 175\n    duration_unit: milliseconds\n")
+        + "  grain.duration: {values: [100, 300]}\n")
+    d = next(d for d in diags_of(text) if d.code == "baseline-required")
+    assert "milliseconds" in d.message and "grain.duration" in d.message
+
+
+def test_axis_grain_duration_baseline_not_required_in_seconds():
+    # senza duration_unit il default engine c'e' e vale: nessun obbligo
+    text = BASE + "  grain.duration: {values: [0.01, 0.03]}\n"
+    assert "baseline-required" not in codes(text)
+
+
+def test_bad_duration_unit_flagged_with_suggestion():
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 175\n    duration_unit: millisecond\n")
+    d = next(d for d in diags_of(text) if d.code == "bad-duration-unit")
+    assert "milliseconds" in d.message
+
+
+def test_bad_duration_unit_values_read_as_seconds():
+    # unita' ignota = fattore ignoto: 175 resta 175 s, fuori bounds
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 175\n    duration_unit: ms\n")
+    assert "out-of-bounds" in codes(text)
+
+
+def test_axis_grain_duration_baseline_required_with_samples():
+    text = (BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 512\n    duration_unit: samples\n")
+        + "  grain.duration: {values: [256, 1024]}\n")
+    assert "baseline-required" in codes(text)
 
 
 def test_grain_duration_samples_axis_values_not_flagged():

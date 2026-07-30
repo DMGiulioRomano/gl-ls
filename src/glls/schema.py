@@ -241,12 +241,19 @@ _ENGINE_STREAM_KEYS = [
 ]
 
 _GRAIN_KEYS = [
-    _k("duration", "Durata del grano in secondi (default 0.05) o campioni con "
-                   "`duration_unit: samples`. Bounds [1 campione, 10 s]. "
-                   "Scalare o envelope."),
-    _k("duration_range", "± randomizzazione della durata per grano."),
-    _k("duration_unit", "`seconds` (default) | `samples` (campioni a 48 kHz, "
-                        "convertiti al parse; duration esplicita obbligatoria).",
+    _k("duration", "Durata del grano nell'unita' di `duration_unit`: secondi "
+                   "(default 0.05), campioni o millisecondi. Bounds "
+                   "[1 campione, 10 s] — sono in **secondi**, i valori si "
+                   "convertono prima del confronto. Scalare o envelope."),
+    _k("duration_range", "± randomizzazione della durata per grano, nell'unita' "
+                         "di `duration_unit`."),
+    _k("duration_unit", "`seconds` (default) | `samples` (campioni a 48 kHz) | "
+                        "`milliseconds` (fattore fisso 1e-3, non dipende da "
+                        "`output_sr`). Convertita al parse. Con un'unita' "
+                        "non-secondi la `duration` esplicita e' obbligatoria, e "
+                        "un asse su `grain.duration` pretende il `baseline` (il "
+                        "default engine e' in secondi e non verrebbe "
+                        "convertito).",
        values=EI.DURATION_UNITS),
     _k("envelope", "Finestra del grano: nome, lista (selezione casuale), "
                    "`{from, to, curve}` (morphing) o `{states, curve}` "

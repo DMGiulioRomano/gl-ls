@@ -44,10 +44,13 @@ PARAMS: Dict[str, ParamInfo] = {
     "distribution": ParamInfo(0, 1, 0.0, "0..1",
         "Distribuzione temporale (modello Truax): 0 = sincrono, 1 = asincrono."),
     "grain.duration": ParamInfo(1.0 / OUTPUT_SR, 10, 0.05, "s",
-        "Durata del singolo grano (con `duration_unit: samples` i valori sono "
-        "campioni a 48000 Hz)."),
+        "Durata del singolo grano. I bounds sono in secondi: con una "
+        "`duration_unit` dichiarata (`samples` = campioni a 48000 Hz, "
+        "`milliseconds` = ms) i valori vivono in quell'unita' e si convertono "
+        "prima del confronto."),
     "grain.duration_range": ParamInfo(0, 10, None, "±s",
-        "Randomizzazione ± della durata per grano."),
+        "Randomizzazione ± della durata per grano, nell'unita' di "
+        "`grain.duration_unit`."),
     "volume": ParamInfo(-120, VOLUME_MAX_DB, 0.0, "dB",
         "Volume dello stream. Sopra 0 dBFS il renderer non normalizza: il "
         "range positivo e' clipping reale, non headroom."),
@@ -131,7 +134,46 @@ SWEEP_MODES = ["discrete", "envelope", "both"]
 DISTRIBUTIONS = ["uniform", "gaussian"]
 TIME_MODES = ["absolute", "normalized"]
 CLIP_STRATEGIES = ["overflow_margin", "passthrough"]
-DURATION_UNITS = ["seconds", "samples"]
+# Unita' di ``grain.duration``/``grain.duration_range``
+# (``pge.core.stream.GRAIN_DURATION_UNITS``, granstudies
+# ``bounds.GRAIN_DURATION_UNITS``). ``milliseconds`` entra con PGE v5.2.0.
+DURATION_UNITS = ["seconds", "samples", "milliseconds"]
+
+MS_PER_SECOND = 1000.0
+
+# Nome dei valori attesi per ogni unita', per i messaggi di diagnostica
+# (granstudies ``study_spec._UNIT_LABELS``).
+GRAIN_UNIT_LABELS: Dict[str, str] = {
+    "seconds": "s", "samples": "campioni", "milliseconds": "ms",
+}
+
+
+def grain_duration_factor(unit: Optional[str], output_sr: int = OUTPUT_SR) -> float:
+    """Fattore che porta un valore di ``grain.duration`` in secondi.
+
+    Unico posto che sa quanto vale un'unita' (granstudies
+    ``bounds.grain_duration_factor``): ``seconds`` (o unita' assente/ignota)
+    -> 1.0; ``milliseconds`` -> 1e-3; ``samples`` -> ``1/output_sr``, l'unica
+    che dipende dal sample rate.
+    """
+    if unit == "milliseconds":
+        return 1.0 / MS_PER_SECOND
+    if unit == "samples":
+        return 1.0 / output_sr
+    return 1.0
+
+
+def unit_note(n: float, unit: Optional[str]) -> str:
+    """Glossa da mettere accanto a un valore espresso in ``unit`` non-secondi.
+
+    ``650 ms`` non si legge come ``0.65 s`` a occhio: il messaggio di bounds
+    porta entrambi i numeri."""
+    factor = grain_duration_factor(unit)
+    if factor == 1.0:
+        return ""
+    label = GRAIN_UNIT_LABELS.get(unit or "", unit or "")
+    extra = f" a {OUTPUT_SR} Hz" if unit == "samples" else ""
+    return f" ({n:g} {label}{extra})"
 
 # ---------------------------------------------------------------------------
 # Unita' della camminata-X (registro X_UNITS di granstudies).
