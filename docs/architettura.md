@@ -36,10 +36,19 @@ Tre strati, tutti puri e testabili senza LSP:
 - **Ricalcoli come code action con TextEdit**, non come comandi custom: cosi'
   funzionano in ogni client senza supporto speciale (`workspace/applyEdit`
   non serve, l'edit viaggia nella risposta).
-- **Memoria delle duration**: al parse il server confronta `duration` e
-  `base.duration` con l'ultimo valore visto; una differenza arma la code
-  action "riscala vecchio -> nuovo" finche' non si torna al valore di
-  partenza. Nessun protocollo extra, funziona con qualsiasi client.
+- **Memoria delle duration**: al parse il server confronta `base.duration`
+  (e la `duration:` top-level, ormai vietata ma ancora scrivibile per errore)
+  con l'ultimo valore visto; una differenza arma la code action "riscala
+  vecchio -> nuovo" finche' non si torna al valore di partenza. Nessun
+  protocollo extra, funziona con qualsiasi client.
+- **La durata e' per-stream** (granstudies #42): non esiste una durata di
+  documento dichiarata — quella e' dedotta, `max(onset + duration)`. Il
+  modello espone una catena (`StudyModel.duration_for(stream)`: `duration:` di
+  entry > `base.duration` > durata di replica di `versions:`/`percorso:`)
+  invece di un campo, e ogni stima che dipende da una durata (anti-runaway
+  della camminata, code lens dei breakpoint, inlay dei tempi normalizzati)
+  passa da li'. Un campo unico li aveva fatti morire in silenzio quando il
+  top-level e' stato vietato.
 - **Conversione unit**: preserva la *banda* punto per punto (bordi invertiti
   nel passaggio rate<->periodo, unione dei tempi per envelope disallineati) e
   rifiuta esplicitamente le forme non statiche (nodi generatore, expr,

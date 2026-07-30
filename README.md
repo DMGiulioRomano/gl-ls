@@ -68,13 +68,15 @@ legenda dei posizionali di una manopola in forma compatta a cicli.
   il passaggio rate↔periodo inverte i bordi della banda
   (`[20, 25] hz` → `[0.04, 0.05] s`), gli envelope si convertono breakpoint
   per breakpoint sull'unione dei tempi;
-- **cambia `duration` e riscala i breakpoint assoluti**: il server ricorda il
-  valore precedente; dopo la modifica offre "riscala 20s → 30s (×1.5)" su
+- **cambia `base.duration` e riscala i breakpoint assoluti**: il server ricorda
+  il valore precedente; dopo la modifica offre "riscala 20s → 30s (×1.5)" su
   tutti gli envelope a tempi assoluti di `base.*` (i `normalized` si riscalano
   da soli), compreso l'`end_time` dei formati compatti;
 - **converti `time_mode` absolute ↔ normalized** ricalcolando i tempi;
 - quick fix: rinomina chiave/valore, rimuovi generatore in piu', aggiungi
-  `n`/`baseline`/`duration`, appiattisci `rand:`/`cps:`, `sweep.combine`.
+  `n`/`baseline`/`base.duration`, **sposta la `duration:` top-level** dove ora
+  vive (`base.duration` o `versions.duration`), appiattisci `rand:`/`cps:`,
+  `sweep.combine`.
 
 **E ancora**: semantic tokens (sezioni, nomi d'asse, marcatori di banda, enum,
 espressioni expr tokenizzate); outline del documento; **inlay hint** con la

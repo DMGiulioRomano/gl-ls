@@ -27,7 +27,14 @@ _KIND = {
     "macro": types.CompletionItemKind.Function,
     "string": types.CompletionItemKind.File,
     "internal": types.CompletionItemKind.Text,
+    "deprecated": types.CompletionItemKind.Text,
 }
+
+# Kind che lo schema conosce ma il completamento non propone: ``internal`` e'
+# scritto dal resolver, ``deprecated`` e' una chiave *vietata* tenuta nello
+# schema solo per poterla diagnosticare con precisione (e spiegare all'hover
+# dove e' finita) invece di liquidarla come sconosciuta.
+_NOT_PROPOSED = frozenset({"internal", "deprecated"})
 
 
 def infer_context(text: str, line: int, character: int) -> Tuple[Tuple[str, ...], str, Optional[str], str]:
@@ -150,7 +157,7 @@ def _complete_key(doc: yamlpos.Document, m: StudyModel,
     present = _existing_keys(doc.text, line, path)
 
     for k in schema.keys_for(ctx):
-        if k.name in present or k.kind == "internal":
+        if k.name in present or k.kind in _NOT_PROPOSED:
             continue
         snippet = k.snippet
         insert = snippet if snippet else (k.name + ": ")

@@ -78,8 +78,9 @@ def hints(doc: Document, m: StudyModel, start_line: int, end_line: int
                              f"duty ≈ {fmt_num(round(duty, 3))} ({state})"))
 
     # 3) tempi normalizzati -> secondi (env di banda e stack)
-    dur = m.duration or m.base_duration
-    if dur:
+    #    la durata e' per-stream (granstudies #42): dentro un override si legge
+    #    quella dello stream, fuori quella risolta del documento
+    if m.duration_for() is not None or m.streams:
         for entry in doc.iter_entries():
             if len(out) >= MAX_HINTS:
                 break
@@ -93,6 +94,11 @@ def hints(doc: Document, m: StudyModel, start_line: int, end_line: int
                     continue
                 t = _num(pair[0])
                 if t is None or not (0 < t < 1):
+                    continue
+                stream = (str(path[1]) if len(path) >= 2 and path[0] == "streams"
+                          and isinstance(path[1], str) else None)
+                dur = m.duration_for(stream)
+                if not dur:
                     continue
                 vs = entry.value_span
                 if not (start_line <= vs.end_line <= end_line):

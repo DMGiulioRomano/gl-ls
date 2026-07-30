@@ -59,16 +59,32 @@ class StreamInfo:
     doc_path: KeyPath
     is_spread: bool = False
     spread_n: Optional[int] = None
+    # Durata dichiarata dalla entry: ``duration:`` di entry (che dopo il merge
+    # diventa top-level del documento merged) o la sua ``base.duration``. None
+    # se la entry non ne dichiara nessuna: erediterebbe quella di documento.
+    duration: Optional[float] = None
+    declares_duration: bool = False       # dichiarata, anche se non statica
 
 
 @dataclass
 class StudyModel:
     doc: Document
     study_id: Optional[str] = None
+    # ``duration:`` al top del documento: NON e' piu' una chiave dello studio
+    # (granstudies #42, ``study_spec.reject_top_level_duration``). Resta nel
+    # modello solo per poterla diagnosticare — non e' una fonte di durata.
     duration: Optional[float] = None
+    has_top_duration: bool = False
     base: Dict[str, Any] = field(default_factory=dict)
     time_mode: str = "absolute"
     base_duration: Optional[float] = None
+    has_base_duration: bool = False       # dichiarata, anche se non statica
+    # Durata di replica iniettata come ``base.duration`` dai rami
+    # multi-documento: ``versions.duration`` (passo della concatenazione) o
+    # ``percorso`` (durata d'istanza, dedotta da arco/passo quando implicita).
+    # Il valore c'e' solo se statico; l'etichetta dice da dove viene.
+    replica_duration_source: Optional[str] = None
+    replica_duration: Optional[float] = None
     axes: Dict[str, AxisInfo] = field(default_factory=dict)
     axes_seed: Optional[int] = None
     study_interpolation: str = "linear"
@@ -84,6 +100,45 @@ class StudyModel:
 
     def walk_for(self, axis: str) -> Optional[WalkInfo]:
         return self.walks.get(axis)
+
+    # ---- durata (granstudies #42) -------------------------------------
+    # Ogni ``duration`` sta accanto alla cosa di cui e' la durata, e quella di
+    # uno *stream* si risolve per catena: ``duration:`` di entry >
+    # ``base.duration`` dello stream > ``base.duration`` di documento. Con
+    # ``versions:``/``percorso:`` la durata di replica viene iniettata come
+    # ``base.duration`` del documento per-combo, quindi fa da default. La
+    # durata del *documento* non si dichiara: e' ``max(onset + duration)``.
+
+    def duration_for(self, stream: Optional[str] = None) -> Optional[float]:
+        """Durata risolta di uno stream (o del documento se ``stream`` e' None).
+
+        None solo quando nessuna fonte statica la risolve: e' l'unico caso in
+        cui il runtime va davvero in errore su ``stack:``."""
+        if stream is not None:
+            si = self.streams.get(stream)
+            if si is not None and si.duration is not None:
+                return si.duration
+        if self.base_duration is not None:
+            return self.base_duration
+        if self.replica_duration is not None:
+            return self.replica_duration
+        # ultima rete: il top-level ora vietato. Leggerlo qui evita che ogni
+        # stima (walk, lens, inlay) muoia su un documento non ancora migrato,
+        # che ha gia' la sua diagnostica.
+        return self.duration
+
+    def declares_duration(self, stream: Optional[str] = None) -> bool:
+        """True se una fonte *dichiara* una durata, anche non statica.
+
+        Serve alle diagnostiche: una durata scritta come generatore o nodo-expr
+        non da' un numero ma non e' un documento senza durata."""
+        if stream is not None:
+            si = self.streams.get(stream)
+            if si is not None and si.declares_duration:
+                return True
+        return (self.has_base_duration
+                or self.replica_duration_source is not None
+                or self.has_top_duration)
 
     def sweep_counts(self) -> Optional[Dict[int, int]]:
         """{ordine: numero varianti} per gli orders dichiarati (se calcolabile)."""
@@ -393,6 +448,7 @@ def build(doc: Document) -> StudyModel:
         return m
     m.study_id = data.get("study_id") if isinstance(data.get("study_id"), str) else None
     m.duration = _num(data.get("duration"))
+    m.has_top_duration = "duration" in data
 
     base = data.get("base")
     if isinstance(base, dict):
@@ -401,6 +457,22 @@ def build(doc: Document) -> StudyModel:
         if tm in ("absolute", "normalized"):
             m.time_mode = tm
         m.base_duration = _num(base.get("duration"))
+        m.has_base_duration = "duration" in base
+
+    # Durata di replica dei rami multi-documento: entrambi la iniettano come
+    # ``base.duration`` del documento per-combo/per-istanza, quindi a valle e'
+    # indistinguibile da un default di documento. ``versions`` la inietta solo
+    # se ``versions.duration`` c'e' (senza, il passo della concatenazione
+    # manca e il runtime da' errore per conto suo); ``percorso`` sempre —
+    # senza ``percorso.duration`` esplicita le istanze sono legate e la durata
+    # e' l'intervallo verso la prossima, dedotto da arco/passo o dagli onset.
+    versions = data.get("versions")
+    if isinstance(versions, dict) and "duration" in versions:
+        m.replica_duration_source = "versions.duration"
+        m.replica_duration = _num(versions.get("duration"))
+    percorso = data.get("percorso")
+    if isinstance(percorso, dict):
+        m.replica_duration_source = m.replica_duration_source or "percorso"
 
     axes = data.get("axes")
     if isinstance(axes, dict):
@@ -470,8 +542,21 @@ def build(doc: Document) -> StudyModel:
                             if owned:
                                 n = owned
                                 break
+            # Catena della entry: la ``duration:`` scritta nella entry (che
+            # dopo il merge diventa top-level del documento merged, come
+            # ``onset``) vince sulla sua ``base.duration``; entrambe vincono
+            # sul default di documento.
+            # ``base.duration:`` puntata al primo livello della entry e la
+            # forma annidata sono la stessa cosa (``_expand_dotted_keys``).
+            entry_base = cfg.get("base") if isinstance(cfg.get("base"), dict) else {}
+            sources = [(cfg, "duration"), (entry_base, "duration"),
+                       (cfg, "base.duration")]
+            declared = any(key in node for node, key in sources)
+            dur = next((_num(node[key]) for node, key in sources
+                        if key in node and _num(node[key]) is not None), None)
             m.streams[name] = StreamInfo(
                 name=name, cfg=cfg, doc_path=("streams", name),
                 is_spread=is_spread, spread_n=n,
+                duration=dur, declares_duration=declared,
             )
     return m

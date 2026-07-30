@@ -2,7 +2,6 @@
 from glls import diagnostics, model, yamlpos
 
 BASE = """study_id: t
-duration: 20
 base:
   onset: 0
   duration: 6
@@ -29,8 +28,96 @@ def test_valid_study_no_diagnostics():
 
 
 def test_stack_requires_duration():
-    text = BASE.replace("duration: 20\n", "") + "stack: {}\n"
+    # nessuna fonte risolve una durata: ne' base.duration ne' una entry
+    text = BASE.replace("  duration: 6\n", "") + "stack: {}\n"
     assert "stack-duration" in codes(text)
+
+
+def test_stack_duration_from_base_not_flagged():
+    # base.duration e' il default di documento: gli stream la ereditano
+    assert "stack-duration" not in codes(BASE + "stack: {}\n")
+
+
+def test_stack_duration_from_stream_entry_not_flagged():
+    text = BASE.replace("  duration: 6\n", "") + """stack: {}
+streams:
+  a:
+    duration: 12
+"""
+    assert "stack-duration" not in codes(text)
+
+
+def test_stack_duration_flagged_only_on_the_orphan_stream():
+    text = BASE.replace("  duration: 6\n", "") + """stack: {}
+streams:
+  a:
+    duration: 12
+  b:
+    base:
+      volume: -6
+"""
+    ds = [d for d in diags_of(text) if d.code == "stack-duration"]
+    assert len(ds) == 1 and "'b'" in ds[0].message
+
+
+def test_stack_duration_from_stream_base_not_flagged():
+    text = BASE.replace("  duration: 6\n", "") + """stack: {}
+streams:
+  a:
+    base:
+      duration: 12
+"""
+    assert "stack-duration" not in codes(text)
+
+
+def test_stack_duration_from_versions_duration_not_flagged():
+    # il passo delle versioni viene iniettato come base.duration della combo
+    text = BASE.replace("  duration: 6\n", "") + """stack: {}
+versions:
+  duration: 50
+  d0: {values: [1, 2]}
+"""
+    assert "stack-duration" not in codes(text)
+
+
+def test_stack_duration_still_missing_with_versions_without_step():
+    text = BASE.replace("  duration: 6\n", "") + """stack: {}
+versions:
+  onset: {values: [0, 50]}
+  d0: {values: [1, 2]}
+"""
+    assert "stack-duration" in codes(text)
+
+
+# --- il divieto di 'duration:' top-level (granstudies #42) -------------------
+
+
+def test_top_level_duration_forbidden():
+    text = "duration: 20\n" + BASE
+    d = next(d for d in diags_of(text) if d.code == "top-level-duration")
+    assert "base.duration" in d.message and "versions.duration" in d.message
+
+
+def test_top_level_duration_forbidden_also_with_versions():
+    text = "duration: 20\n" + BASE + "versions:\n  d0: {values: [1, 2]}\n"
+    d = next(d for d in diags_of(text) if d.code == "top-level-duration")
+    assert d.data["fix"]["to_versions"] is True
+
+
+def test_top_level_duration_fix_targets_base_when_versions_has_step():
+    text = ("duration: 20\n" + BASE
+            + "versions:\n  duration: 50\n  d0: {values: [1, 2]}\n")
+    d = next(d for d in diags_of(text) if d.code == "top-level-duration")
+    assert d.data["fix"]["to_versions"] is False
+
+
+def test_top_level_duration_replaces_the_stack_duration_error():
+    # un solo errore, quello vero: il rimedio (spostala in base.duration) copre
+    # anche il bisogno dello stack, quindi non si urla due volte
+    text = ("duration: 20\n" + BASE.replace("  duration: 6\n", "")
+            + "stack: {}\n")
+    cs = codes(text)
+    assert "top-level-duration" in cs and "stack-duration" not in cs
 
 
 def test_axis_without_generator():

@@ -135,6 +135,30 @@ COMPACT_ENV_DOC = (
     "`power`, o dict `{type, ...}`; `wrap` = booleano. Il quinto elemento "
     "`null` esiste solo per raggiungere il sesto."
 )
+# ``duration:`` top-level (granstudies #42): non e' piu' una chiave dello
+# studio. Faceva tre lavori diversi e ora ognuno sta accanto alla cosa di cui
+# e' la durata — la tabella e' il modo piu' corto di dirlo.
+DURATION_DEPRECATED_DOC = (
+    "**Chiave vietata.** `duration:` non e' (piu') una chiave top-level dello "
+    "studio: la durata del **documento** e' dedotta, `max(onset + duration)` "
+    "sugli stream costruiti, non dichiarata. Simmetrica al divieto di "
+    "`onset:` top-level.\n\n"
+    "Faceva tre lavori insieme — default della durata di stream, passo di "
+    "concatenazione di `versions:`, durata del documento nel ramo discrete. "
+    "Le quattro `duration` di oggi:\n\n"
+    "| Cos'e' | Dove si scrive |\n"
+    "|---|---|\n"
+    "| durata di **uno stream** (default di documento) | `base.duration` |\n"
+    "| durata di **uno stream** (override) | `duration:` di una entry di "
+    "`streams:` |\n"
+    "| durata / **passo** di una versione | `versions.duration` |\n"
+    "| durata di una **istanza** di percorso | `percorso.duration` (o dedotta "
+    "da `arco`/`passo`) |\n"
+    "| durata del **documento** | *non si scrive*: `max(onset + duration)` |\n\n"
+    "Il runtime la rifiuta con `SpecError` in tutti i rami "
+    "(`study_spec.reject_top_level_duration`), anche dentro `versions:` e "
+    "`percorso:`. Quick fix disponibile: spostala dove ora vive."
+)
 # ``spread.n`` come Env: il coro cresce e cala nel tempo. Il pezzo che sorprende
 # non e' la sintassi ma la conseguenza sul volume, quindi la doc la dice subito.
 SPREAD_N_ENV_DOC = (
@@ -187,9 +211,13 @@ _DRIFT_KEYS = [
 
 _ENGINE_STREAM_KEYS = [
     _k("onset", "Tempo di inizio assoluto dello stream (s)."),
-    _k("duration", "Durata dello stream (s); usata dalle varianti discrete. "
-                   "Cambiandola, gl-ls offre il ricalcolo dei breakpoint "
-                   "assoluti degli envelope."),
+    _k("duration", "**Durata di uno stream** (s) — e in `base:` e' il default "
+                   "per tutti gli stream del documento, scavalcabile dalla "
+                   "`duration:` di una entry di `streams:`. Non e' la durata "
+                   "del documento: quella e' dedotta, `max(onset + duration)`. "
+                   "Con `stack:` ogni stream deve risolverne una, propria o "
+                   "ereditata da qui. Cambiandola, gl-ls offre il ricalcolo "
+                   "dei breakpoint assoluti degli envelope."),
     _k("sample", "File audio sorgente (cercato in `samples_dir`).", kind="string"),
     _k("time_mode", "Unita' dell'asse X degli envelope: `absolute` (secondi, "
                     "default) | `normalized` ([0,1] mappato su duration alla "
@@ -356,9 +384,7 @@ _ROOT_KEYS = [
     _k("study_id", "Identificatore dello studio (usato come nome cartella).", kind="keyword"),
     _k("title", "Titolo libero; finisce nell'header dei file generati.", kind="keyword"),
     _k("seed", "Seed globale engine (render NumPy riproducibili).", kind="keyword"),
-    _k("duration", "Durata condivisa (s): **obbligatoria se c'e' `stack:`** (la "
-                   "durata su cui il processo normalizza i tempi). Cambiandola, "
-                   "gl-ls offre il ricalcolo dei breakpoint assoluti.", kind="keyword"),
+    _k("duration", DURATION_DEPRECATED_DOC, kind="deprecated"),
     _k("samples_dir", "Path relativo alla root del repo (default `samples/`).", kind="keyword"),
     _k("base", "Parametri fissi dello stream: tutto cio' che non e' un asse "
                "(superficie engine PGE).", kind="keyword",
@@ -445,10 +471,23 @@ _SWEEP_KEYS = [
 ]
 
 _VERSIONS_RESERVED = [
-    _k("onset", "Chiave riservata di `versions:`: onset assoluto (s) condiviso, "
-                "non una variabile del prodotto cartesiano.", kind="keyword"),
-    _k("duration", "Chiave riservata di `versions:`: durata (s) condivisa, non "
-                   "una variabile del prodotto cartesiano.", kind="keyword"),
+    _k("onset", "Chiave riservata di `versions:`: onset assoluto (s), non una "
+                "variabile del prodotto cartesiano. Scalare broadcastato su N "
+                "(tutte le versioni allo stesso istante: **sovrapposte**) o "
+                "generatore. Assente: gli onset si accumulano dal passo "
+                "`versions.duration`.", kind="keyword"),
+    _k("duration", "Chiave riservata di `versions:`: **passo della "
+                   "concatenazione** (s) *e* default della durata degli stream "
+                   "della versione — le due cose insieme, perche' viene "
+                   "iniettata come `base.duration` del documento della combo "
+                   "(una `duration:` di entry la scavalca come sempre). "
+                   "Scalare broadcastato su N (`duration: 50` = una versione "
+                   "ogni 50 s) o generatore. E' l'**unico** modo di "
+                   "concatenare: senza `versions.onset` ne' "
+                   "`versions.duration` il runtime da' errore, e "
+                   "`base.duration` non vale come ripiego (e' la durata di uno "
+                   "stream, non il passo). Non e' una variabile del prodotto "
+                   "cartesiano.", kind="keyword"),
     _k("chunk", "Chiave riservata di `versions:`: intero `>= 1`. Riordina le "
                 "combinazioni per **traversata diagonale** della griglia (somma "
                 "degli indici crescente, non nesting lessicografico) e le taglia "
@@ -491,6 +530,16 @@ _WALK_KEYS = [
 ]
 
 _STREAM_OVERRIDE_KEYS = [
+    # ``onset``/``duration`` sono chiavi della entry, non del documento: dopo il
+    # merge diventano top-level del documento merged (ed e' per questo che il
+    # divieto top-level vale solo sul documento originale). Sulla ``duration``
+    # la entry e' *la* forma dell'override (granstudies #26, #42).
+    _k("onset", "Tempo di inizio assoluto di questo stream (s). L'onset e' solo "
+                "per-stream: al top del documento e' vietato (un onset globale "
+                "che sposta tutti gli stream insieme e' ambiguo)."),
+    _k("duration", "**Durata di questo stream** (s): scavalca il default "
+                   "`base.duration` del documento. E' la forma dell'override — "
+                   "al top del documento `duration:` e' vietata."),
     _k("base", "Override parziale di `base` (deep-merge; i campi non toccati restano).", kind="keyword"),
     _k("axes", "Override parziale di `axes`: un generatore nuovo **rimpiazza** "
                "quello ereditato sullo stesso asse (via anche le chiavi banda).", kind="keyword"),

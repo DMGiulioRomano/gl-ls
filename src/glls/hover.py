@@ -164,9 +164,21 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
         walk = m.walk_for(str(path[-2]))
         if walk:
             text += f"\n\nUnit risolta per quest'asse: **{walk.unit}**"
-    if str(name) == "duration" and ctx == "root":
+    if str(name) == "duration" and ctx in ("engine_stream", "stream_override"):
         text += ("\n\nCode action disponibile dopo una modifica: *riscala i "
                  "breakpoint assoluti degli envelope al nuovo valore*.")
+    if str(name) == "duration" and ctx == "root":
+        # dire dove la durata si risolve *in questo documento* rende concreto
+        # il rimedio: spesso la chiave giusta c'e' gia' e il top-level e' un
+        # residuo da cancellare
+        if m.has_base_duration:
+            text += (f"\n\nQui `base.duration` c'e' gia' "
+                     f"({fmt_num(m.base_duration)} s): la durata degli stream e' "
+                     "quella, questa riga e' un residuo.")
+        elif m.replica_duration_source is not None:
+            text += (f"\n\nQui c'e' `{m.replica_duration_source}`: la durata di "
+                     "replica viene iniettata come `base.duration` e fa da "
+                     "default per gli stream.")
     # la forma compatta a cicli non e' un fatto del ``let:``: vale in ogni Env
     # che passa da ``expand_params`` (base/range di banda e camminata, drift.step),
     # e li' la legenda dei posizionali serve quanto sopra una manopola
@@ -232,7 +244,7 @@ def _hover_value(doc: Document, m: StudyModel, path: KeyPath,
 
     # tempo normalizzato -> secondi
     if n is not None and 0 <= n <= 1 and _is_env_time(doc, path):
-        dur = m.duration or m.base_duration
+        dur = m.duration_for(_stream_of(path))
         if dur:
             return _md(f"t = **{fmt_num(n)}** → {fmt_num(n * dur)} s "
                        f"(su duration {fmt_num(dur)} s)", rng)
@@ -244,6 +256,16 @@ def _hover_value(doc: Document, m: StudyModel, path: KeyPath,
         if dotted == "density":
             text += f"\n\n{EI.density_zone(n)}"
         return _md(text, rng)
+    return None
+
+
+def _stream_of(path: KeyPath) -> Optional[str]:
+    """Nome dello stream se il path vive dentro una entry di ``streams:``.
+
+    La durata e' per-stream (granstudies #42): un tempo normalizzato dentro un
+    override si legge sulla durata di QUELLO stream."""
+    if len(path) >= 2 and path[0] == "streams" and isinstance(path[1], str):
+        return path[1]
     return None
 
 

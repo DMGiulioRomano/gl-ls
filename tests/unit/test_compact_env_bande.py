@@ -15,7 +15,6 @@ from lsprotocol import types
 from glls import diagnostics, hover, inlay, model, yamlpos
 
 BASE = """study_id: t
-duration: 20
 base:
   onset: 0
   duration: 6

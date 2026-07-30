@@ -128,18 +128,75 @@ def collect(doc: Document, m: StudyModel) -> List[types.Diagnostic]:
 
 
 def _check_root(bag: Bag, doc: Document, m: StudyModel) -> None:
-    if m.has_stack and m.duration is None:
-        bag.add(("stack",),
-                "stack: serve 'duration:' top-level (la durata condivisa su cui "
-                "il processo normalizza i tempi).",
-                code="stack-duration",
-                data={"fix": {"kind": "add-duration"}})
+    _check_top_duration(bag, doc, m)
+    _check_stack_duration(bag, doc, m)
     axes = doc.get(("axes",))
     if axes is None:
         bag.add(("study_id",) if doc.entry(("study_id",)) else (),
                 "Lo studio deve definire almeno un asse in 'axes'.",
                 types.DiagnosticSeverity.Warning, code="no-axes")
 
+
+def _check_top_duration(bag: Bag, doc: Document, m: StudyModel) -> None:
+    """``duration:`` al top del documento e' vietata (granstudies #42).
+
+    Faceva tre lavori — default della durata di stream, passo di
+    concatenazione di ``versions:``, durata del documento nel ramo discrete —
+    e ora ogni ``duration`` sta accanto alla cosa di cui e' la durata. La
+    durata del documento non si scrive: e' ``max(onset + duration)``.
+    Simmetrica al divieto di ``onset`` top-level (#26); il runtime la rifiuta
+    in tutti i rami, ``study_spec.reject_top_level_duration``."""
+    if not m.has_top_duration:
+        return
+    versions = doc.get(("versions",))
+    # Con ``versions:`` senza passo proprio, la lettura piu' probabile del
+    # top-level e' "passo della concatenazione": offrire lo spostamento anche
+    # la' evita di indovinare per l'utente.
+    to_versions = isinstance(versions, dict) and "duration" not in versions
+    hint = ("Rimedio: 'base.duration' per la durata di uno stream (default di "
+            "documento), 'duration:' nella entry per l'override di uno stream, "
+            "'versions.duration' per il passo delle versioni.")
+    bag.add(("duration",),
+            "'duration' non e' una chiave top-level dello studio: la durata "
+            "del documento e' dedotta (max(onset + duration)), non "
+            f"dichiarata. {hint}",
+            code="top-level-duration",
+            data={"fix": {"kind": "move-duration",
+                          "to_versions": to_versions}})
+
+
+def _check_stack_duration(bag: Bag, doc: Document, m: StudyModel) -> None:
+    """``stack:`` pretende che ogni stream risolva una durata.
+
+    Non e' piu' un fatto di documento: la durata e' per-stream e si risolve
+    per catena (``duration:`` di entry > ``base.duration``), con la durata di
+    replica di ``versions:``/``percorso:`` come default. L'errore va emesso
+    solo quando NESSUNA fonte la risolve — e va puntato su ``base.duration``,
+    che e' il posto dove si scrive il default."""
+    if not m.has_stack or m.declares_duration():
+        return
+    # Nessun default di documento: sono in errore gli stream che non ne
+    # dichiarano una propria. Con ``streams:`` popolato l'errore e' loro, uno
+    # per uno; senza streams e' del documento.
+    orphans = [name for name, si in m.streams.items() if not si.declares_duration]
+    remedy = ("Dichiara 'base: {duration: <secondi>}' (default per tutti gli "
+              "stream) oppure 'duration:' nella entry dello stream.")
+    if m.streams and not orphans:
+        return
+    if m.streams:
+        for name in orphans:
+            bag.add(("streams", name),
+                    f"stack: lo stream '{name}' non risolve nessuna 'duration' "
+                    f"(ne' propria ne' ereditata da 'base.duration'). {remedy}",
+                    code="stack-duration",
+                    data={"fix": {"kind": "add-base-duration"}})
+        return
+    target: KeyPath = ("base",) if doc.entry(("base",)) else ("stack",)
+    bag.add(target,
+            "stack: nessuna 'duration' risolta per gli stream (ne' propria "
+            f"ne' ereditata da 'base.duration'). {remedy}",
+            code="stack-duration",
+            data={"fix": {"kind": "add-base-duration"}})
 
 
 # Parametri che l'engine riscala verso i secondi quando ``grain.duration_unit``
@@ -690,12 +747,18 @@ def _check_stack(bag: Bag, doc: Document, m: StudyModel, prefix: KeyPath) -> Non
 
 def _check_walk_runaway(bag: Bag, doc: Document, m: StudyModel,
                         epath: KeyPath, cfg: Dict[str, Any], name: str) -> None:
-    """Stima anti-runaway: banda che genererebbe troppi breakpoint."""
+    """Stima anti-runaway: banda che genererebbe troppi breakpoint.
+
+    La durata da cui dipende la stima e' quella *risolta dello stream* a cui la
+    camminata appartiene (granstudies #42): due stream dello stesso documento
+    possono averne una diversa, e il top-level non esiste piu'."""
     from . import convert
 
-    if m.duration is None or m.duration <= 0:
+    in_stream = epath[:1] == ("streams",)
+    duration = m.duration_for(str(epath[1]) if in_stream else None)
+    if duration is None or duration <= 0:
         return
-    walk = m.walk_for(name) if not epath[:1] == ("streams",) else None
+    walk = m.walk_for(name) if not in_stream else None
     unit = (cfg.get("unit") if isinstance(cfg.get("unit"), str)
             else (walk.unit if walk else (m.stack_unit or "hz")))
     if unit not in EI.X_UNITS:
@@ -724,11 +787,11 @@ def _check_walk_runaway(bag: Bag, doc: Document, m: StudyModel,
     step = steps[unit](mean)
     if step <= 0:
         return
-    est = m.duration / step
+    est = duration / step
     if est > MAX_WALK_POINTS:
         bag.add(epath + ("base",),
                 f"stack.{name}: ~{int(est)} breakpoint stimati (> {MAX_WALK_POINTS}) "
-                f"su duration={m.duration:g}s — il walk andrebbe in errore "
+                f"su duration={duration:g}s — il walk andrebbe in errore "
                 "anti-runaway.",
                 types.DiagnosticSeverity.Warning, code="walk-runaway",
                 prefer_value=True)
