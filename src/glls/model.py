@@ -287,6 +287,27 @@ def expand_over_items(
     return out
 
 
+def has_compact_frame(spec: Any) -> bool:
+    """La *cornice* posizionale di una forma compatta, senza guardare il pattern.
+
+    ``3-6 elementi`` con ``end_time`` numero in posizione 1 e ``n_reps`` intero
+    in posizione 2. Separarla dal predicato completo serve a un caso solo, ma
+    ambiguo: un pattern scritto come BP group. ``[group, end_time, n_reps]`` non
+    e' preso ne' da ``is_compact_env`` (il pattern non e' una lista di liste)
+    ne' da ``is_bp_group`` (3 elementi), e senza la cornice non si
+    distinguerebbe da un envelope misto di tre macrozone — dove il secondo
+    elemento e' una lista, non un numero.
+    """
+    return (
+        isinstance(spec, (list, tuple))
+        and 3 <= len(spec) <= 6
+        and isinstance(spec[1], (int, float))
+        and not isinstance(spec[1], bool)
+        and isinstance(spec[2], int)
+        and not isinstance(spec[2], bool)
+    )
+
+
 def is_compact_env(spec: Any) -> bool:
     """True se ``spec`` e' la forma compatta a cicli dell'engine.
 
@@ -297,16 +318,71 @@ def is_compact_env(spec: Any) -> bool:
     posizione 1, lo shorthand ``[a, b]`` ha due soli scalari.
     """
     return (
-        isinstance(spec, (list, tuple))
-        and 3 <= len(spec) <= 6
+        has_compact_frame(spec)
         and isinstance(spec[0], (list, tuple))
         and len(spec[0]) > 0
         and all(isinstance(p, (list, tuple)) for p in spec[0])
-        and isinstance(spec[1], (int, float))
-        and not isinstance(spec[1], bool)
-        and isinstance(spec[2], int)
-        and not isinstance(spec[2], bool)
     )
+
+
+def is_bp_group(spec: Any) -> bool:
+    """True se ``spec`` e' un **BP group** dell'engine: ``[points, interp]``.
+
+    Un run di breakpoint avvolto in un gruppo compatto che dichiara
+    l'interpolazione della propria macrozona (PGE #64, ``yaml.md`` §2.7),
+    simmetrico ai loop block. La disambiguazione e' quella ufficiale: il BP
+    group e' l'unica lista a **2 elementi** con ``elem[0]`` lista di punti ed
+    ``elem[1]`` stringa. Un breakpoint nudo ``[t, v]`` ha ``elem[0]``
+    numerico; un loop block ha 3-6 elementi (quindi nessuna collisione con
+    ``is_compact_env``).
+
+    Differenza che conta per la validazione: i tempi dei punti del gruppo sono
+    **assoluti**, non percentuali del ciclo come nel ``pattern`` della forma
+    compatta, ne' normalizzati in [0, 1] come i breakpoint di banda.
+    """
+    return (
+        isinstance(spec, (list, tuple))
+        and len(spec) == 2
+        and isinstance(spec[0], (list, tuple))
+        and len(spec[0]) > 0
+        and all(isinstance(p, (list, tuple)) for p in spec[0])
+        and isinstance(spec[1], str)
+    )
+
+
+def looks_like_bp_group(spec: Any) -> bool:
+    """Come :func:`is_bp_group`, ma senza pretendere punti ben formati.
+
+    ``is_bp_group`` e' il predicato *ufficiale*, quello che disambigua un
+    gruppo da un breakpoint nudo e da un loop block: pretende che ``elem[0]``
+    sia una lista di liste, quindi dice No a un gruppo scritto male. Alla
+    diagnostica serve il contrario — ``[[[..], 1, 4], 'cubic']`` (una forma
+    compatta infilata al posto dei punti) non e' un gruppo valido ma e'
+    inequivocabilmente un gruppo *sbagliato*, e dirlo e' meglio che tacere.
+    """
+    return (isinstance(spec, (list, tuple)) and len(spec) == 2
+            and isinstance(spec[0], (list, tuple)) and len(spec[0]) > 0
+            and isinstance(spec[1], str))
+
+
+def bp_group_summary(spec: Any) -> Optional[str]:
+    """Riassunto leggibile di un BP group: punti, interp, arco dei tempi.
+
+    ``3 punti · cubic · t 0–1 (assoluti)`` — l'arco compare solo se i tempi
+    del primo e ultimo punto sono numeri. None se ``spec`` non e' un gruppo.
+    """
+    if not is_bp_group(spec):
+        return None
+    points, interp = spec[0], spec[1]
+    n = len(points)
+    parts = [f"{n} {'punto' if n == 1 else 'punti'}", str(interp)]
+    t0 = _num(points[0][0]) if points[0] else None
+    t1 = _num(points[-1][0]) if points[-1] else None
+    if t0 is not None and t1 is not None:
+        parts.append(f"t {t0:g}–{t1:g} (assoluti)")
+    else:
+        parts.append("tempi assoluti")
+    return " · ".join(parts)
 
 
 def in_spread_let(path: KeyPath) -> bool:

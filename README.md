@@ -42,6 +42,14 @@ Language server (LSP) per il **linguaggio di granulazione** degli
   da 1 — che a runtime finisce in hold silenzioso — e punti del pattern a 3
   elementi sono errore (`type` e' globale), `x%` fuori da [0, 100] e' un
   warning;
+- **BP group** (`[points, interp]`, la macrozona con interpolazione propria,
+  PGE #64), in forma diretta e dentro un envelope misto: `interp` fuori da
+  linear/cubic/step, gruppo con meno di 2 punti (nessun segmento interno),
+  annidamento con la forma compatta — e i bounds sui punti del gruppo, che
+  prima non venivano mai guardati. I suoi tempi sono **assoluti**, quindi i
+  controlli sui breakpoint nudi e sulle `x%` del pattern non gli si applicano;
+  se il primo punto non supera il bordo della zona precedente, l'engine trasla
+  di `DISCONTINUITY_OFFSET` in silenzio e gl-ls avvisa;
 - **`versions:` ad assi ortogonali**: discriminatore Forma 1 (manopole
   co-varianti) / Forma 2 (stati nominati) e segnalazione degli assi misti;
 - guardia anti-runaway: stima dei breakpoint della camminata-X (> 10000 = errore
@@ -82,7 +90,9 @@ legenda dei posizionali di una manopola in forma compatta a cicli.
 espressioni expr tokenizzate); outline del documento; **inlay hint** con la
 banda convertita nell'altra unita', il **duty factor** (`density ×
 grain.duration`) e il riassunto di una forma compatta (`4 cicli · vertice 25% ·
-wrap`); **code lens** con le varianti sweep per ordine, la durata
+wrap`); legenda dei posizionali di un BP group (`3 punti · cubic · t 0–1
+(assoluti)`) con snippet per scriverlo; **code lens** con le varianti sweep per
+ordine, la durata
 stimata, i breakpoint stimati d'ogni camminata e gli stream generati da ogni
 spread; go-to-definition/references sui nomi d'asse; link ai sample.
 

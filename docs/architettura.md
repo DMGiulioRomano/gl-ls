@@ -65,7 +65,15 @@ Tre strati, tutti puri e testabili senza LSP:
   (`points`, con `time_mode` locale rispettato) e l'`end_time` dei compatti;
   non i `values` di spread (semantica ambigua).
 - I bounds dinamici dell'engine (`loop_* <= sample_dur`) non sono verificati
-  (servirebbe leggere il file audio).
+  (servirebbe leggere il file audio). Da PGE v5.1.0 `pge.api.parameter_bounds()`
+  li espone gia' risolti: chiuderebbe il drift della tabella di `engine_info`,
+  al prezzo della scelta standalone.
+- La superficie posizionale degli envelope engine (forma compatta a cicli, BP
+  group `[points, interp]`) si valida per *forma*, non per grammatica: i
+  predicati sono quelli ufficiali della disambiguazione — cornice a 3-6
+  elementi con `end_time` numero e `n_reps` intero per la compatta, 2 elementi
+  con lista di punti e stringa per il gruppo — e una forma che non ricade in
+  nessuno dei due passa senza diagnostica invece di essere indovinata.
 
 ## Estendere
 

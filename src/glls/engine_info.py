@@ -4,6 +4,15 @@ Snapshot dichiarativo di bounds, default, finestre, unita' e path YAML del
 PythonGranularEngine (fonte: ``docs/reference/yaml.md`` e
 ``parameter_definitions.py`` dell'engine). gl-ls e' standalone: non importa
 l'engine, replica la sua superficie osservabile.
+
+Il costo di quella scelta e' il drift: la tabella qui sotto va allineata a
+mano. Se un giorno lo si vuole chiudere, da PGE v5.1.0 esiste l'API stabile
+pensata per questo consumo — ``pge.api.parameter_bounds(output_sr=...,
+sample_dur_sec=...)`` (PGE #163), che restituisce i bounds con gli override
+dinamici gia' applicati (``grain_duration.min_val = 1/output_sr``, ``loop_*``
+limitati a ``sample_dur_sec``). Finche' la scelta standalone resta, quei
+bounds dinamici sono fuori portata: vedi "Limiti noti" in
+``docs/architettura.md``.
 """
 from __future__ import annotations
 

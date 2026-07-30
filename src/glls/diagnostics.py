@@ -25,8 +25,11 @@ from .model import (
     VERSIONS_RESERVED,
     StudyModel,
     expand_over_items,
+    has_compact_frame,
+    is_bp_group,
     is_compact_env,
     is_n_env,
+    looks_like_bp_group,
     n_env_values,
     over_items,
     ramp_count,
@@ -533,17 +536,30 @@ def _check_band(bag: Bag, doc: Document, path: KeyPath, cfg: Dict[str, Any],
                         code="drift-step", prefer_value=True)
             _check_compact_knob(bag, locate("drift", "step"), drift.get("step"),
                                 f"{label} drift.step")
+            _check_bp_groups(bag, locate("drift", "step"), drift.get("step"),
+                             f"{label} drift.step")
     for border in ("base", "range"):
         _check_env_times(bag, locate(border), cfg.get(border), label)
         _check_compact_knob(bag, locate(border), cfg.get(border),
                             f"{label} {border}")
+        _check_bp_groups(bag, locate(border), cfg.get(border),
+                         f"{label} {border}")
 
 
 def _check_env_times(bag: Bag, path: KeyPath, form: Any, label: str) -> None:
-    """Nei breakpoint di banda i tempi vivono in [0, 1]."""
+    """Nei breakpoint di banda i tempi vivono in [0, 1].
+
+    I BP group (PGE #64) sono esclusi: hanno tempi **assoluti**, quindi una
+    macrozona a t=50 non e' un breakpoint fuori scala — la valida
+    ``_check_bp_groups``. Un gruppo diretto ``[points, interp]`` e' una lista a
+    2 elementi come un breakpoint nudo: senza questa esclusione il controllo
+    leggerebbe ``p[0]`` (una lista di punti) al posto di un tempo."""
+    if is_bp_group(form):
+        return
     pts = None
     if isinstance(form, list) and form and all(
-        isinstance(p, (list, tuple)) and len(p) == 2 for p in form
+        isinstance(p, (list, tuple)) and len(p) == 2 and not is_bp_group(p)
+        for p in form
     ):
         pts = form
     elif isinstance(form, dict) and isinstance(form.get("points"), list):
@@ -569,6 +585,144 @@ def _check_env_times(bag: Bag, path: KeyPath, form: Any, label: str) -> None:
                     "sono normalizzati sulla sequenza).",
                     types.DiagnosticSeverity.Warning, code="band-time",
                     prefer_value=True)
+
+
+# ---------------------------------------------------------------------------
+# BP group ``[points, interp]`` (PGE #64, engine v5.1.0)
+
+
+def _zone_last_time(zone: Any) -> Optional[float]:
+    """Ultimo tempo (assoluto) coperto da una macrozona di envelope.
+
+    Serve solo alla guardia sulla collisione al bordo: BP group -> il tempo
+    dell'ultimo punto; loop block -> il suo ``end_time``; breakpoint nudo ->
+    il proprio tempo. None quando non e' un numero statico."""
+    if is_bp_group(zone):
+        pts = zone[0]
+        return _num(pts[-1][0]) if pts and pts[-1] else None
+    if is_compact_env(zone):
+        return _num(zone[1])
+    if isinstance(zone, (list, tuple)) and len(zone) in (2, 3):
+        return _num(zone[0])
+    return None
+
+
+def _check_bp_group(bag: Bag, path: KeyPath, group: Any, label: str,
+                    engine_path: Optional[str] = None,
+                    grain_unit: Optional[str] = None,
+                    prev_time: Optional[float] = None) -> None:
+    """I vincoli del BP group, piu' i bounds sui suoi punti.
+
+    ``interp`` dell'insieme chiuso (fuori -> ``InvalidFieldValueError`` lato
+    engine), almeno 2 punti (una zona con un punto solo non ha segmenti
+    interni: ``ValueError``), punti ``[t, v]``/``[t, v, type]`` con ``type``
+    per-punto valido — l'override del group interp per quel segmento. Niente
+    forme compatte dentro il gruppo: l'annidamento non esiste.
+
+    ``prev_time`` e' l'ultimo tempo della macrozona precedente: se il primo
+    punto del gruppo non lo supera, l'engine trasla di ``DISCONTINUITY_OFFSET``
+    senza dirlo (come per i loop block) — un warning, non un errore."""
+    points, interp = group[0], group[1]
+    if interp not in EI.INTERPOLATIONS:
+        sug = _suggest(str(interp), EI.INTERPOLATIONS)
+        extra = f" Forse '{sug}'?" if sug else ""
+        bag.add(path + (1,),
+                f"{label}: BP group, interp '{interp}' non valida "
+                f"({' | '.join(EI.INTERPOLATIONS)}).{extra}",
+                code="bp-group-interp", prefer_value=True,
+                data={"fix": {"kind": "rename-value", "new": sug}} if sug else None)
+    if is_compact_env(points):
+        bag.add(path + (0,),
+                f"{label}: BP group con una forma compatta a cicli al posto dei "
+                "punti — l'annidamento non esiste (ne' gruppi dentro pattern "
+                "compatti ne' viceversa). Il gruppo vuole breakpoint "
+                "'[t, v]'/'[t, v, type]' a tempi assoluti.",
+                code="bp-group-nested", prefer_value=True)
+        return
+    if len(points) < 2:
+        bag.add(path + (0,),
+                f"{label}: BP group con {len(points)} punto — servono almeno 2 "
+                "(l'interp del gruppo governa i segmenti *interni*: n punti = "
+                "n-1 segmenti, e con un punto solo non ce n'e' nessuno).",
+                code="bp-group-points", prefer_value=True)
+    for i, p in enumerate(points):
+        ppath = path + (0, i)
+        if is_compact_env(p) or is_bp_group(p):
+            bag.add(ppath,
+                    f"{label}: BP group, il punto {i} e' a sua volta una forma "
+                    "compatta/un gruppo — l'annidamento non esiste (ne' gruppi "
+                    "dentro pattern compatti ne' viceversa).",
+                    code="bp-group-nested", prefer_value=True)
+            continue
+        if not isinstance(p, (list, tuple)) or len(p) not in (2, 3):
+            got = list(p) if isinstance(p, (list, tuple)) else p
+            bag.add(ppath,
+                    f"{label}: BP group, i punti sono '[t, v]' o '[t, v, type]' "
+                    f"(ricevuto {got!r}).",
+                    code="bp-group-point", prefer_value=True)
+            continue
+        if len(p) == 3 and p[2] not in EI.INTERPOLATIONS:
+            bag.add(ppath,
+                    f"{label}: BP group, type per-punto '{p[2]}' non valido "
+                    f"({' | '.join(EI.INTERPOLATIONS)}).",
+                    code="bad-enum", prefer_value=True)
+        if engine_path is not None:
+            y = _num(p[1])
+            if y is not None:
+                _check_bounds_value(bag, ppath, engine_path, y,
+                                    f"{engine_path} t={p[0]!r}",
+                                    grain_unit=grain_unit)
+    first = _num(points[0][0]) if points and points[0] else None
+    if prev_time is not None and first is not None and first <= prev_time:
+        bag.add(path + (0, 0),
+                f"{label}: BP group, il primo punto (t={first:g}) non e' oltre "
+                f"l'ultimo breakpoint della zona precedente (t={prev_time:g}): "
+                "l'engine trasla il bordo di DISCONTINUITY_OFFSET senza "
+                "segnalarlo, come per i loop block.",
+                types.DiagnosticSeverity.Warning, code="bp-group-collision",
+                prefer_value=True)
+
+
+def _check_bp_groups(bag: Bag, path: KeyPath, form: Any, label: str,
+                     engine_path: Optional[str] = None,
+                     grain_unit: Optional[str] = None) -> bool:
+    """Valida i BP group di un envelope, diretto o misto. True se ce n'erano.
+
+    Forma **diretta**: l'envelope *e'* un gruppo (una sola macrozona). Forma
+    **mista**: una lista di macrozone dove i gruppi convivono con loop block e
+    breakpoint nudi. Il ritorno dice al chiamante di non applicare a questa
+    forma i controlli pensati per i breakpoint nudi — i tempi qui sono
+    assoluti."""
+    if looks_like_bp_group(form):
+        _check_bp_group(bag, path, form, label, engine_path, grain_unit)
+        return True
+    if not isinstance(form, (list, tuple)):
+        return False
+    # Forma compatta il cui ``pattern`` e' un BP group: non e' ne' l'una ne'
+    # l'altro per i predicati (``is_compact_env`` vuole tutti i punti del
+    # pattern liste, e un gruppo ha una stringa in coda), quindi senza questo
+    # caso l'annidamento passerebbe muto.
+    if has_compact_frame(form) and looks_like_bp_group(form[0]):
+        bag.add(path + (0,),
+                f"{label}: forma compatta col 'pattern' scritto come BP group "
+                "'[points, interp]' — l'annidamento non esiste. "
+                "L'interpolazione della forma compatta e' il suo quarto "
+                "elemento posizionale.",
+                code="bp-group-nested", prefer_value=True)
+        return True
+    if is_compact_env(form):
+        return False
+    if not any(looks_like_bp_group(z) for z in form):
+        return False
+    prev: Optional[float] = None
+    for i, zone in enumerate(form):
+        if looks_like_bp_group(zone):
+            _check_bp_group(bag, path + (i,), zone, f"{label} zona {i}",
+                            engine_path, grain_unit, prev_time=prev)
+        last = _zone_last_time(zone)
+        if last is not None:
+            prev = last
+    return True
 
 
 def _check_ramp(bag: Bag, path: KeyPath, r: Any, label: str,
@@ -1503,6 +1657,11 @@ def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
     if _num(v) is not None:
         _check_bounds_value(bag, path, dotted, v, dotted, grain_unit=grain_unit)
         return
+    # BP group, diretto o misto (PGE #64): i punti del gruppo vengono validati
+    # e confrontati coi bounds la' dentro, sui loro tempi assoluti. Senza
+    # questo ramo un gruppo passava muto e i suoi Y non venivano mai visti.
+    if _check_bp_groups(bag, path, v, dotted, dotted, grain_unit):
+        return
     pts: Optional[list] = None
     ppath = path
     if isinstance(v, list) and v and all(
@@ -1512,6 +1671,8 @@ def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
     elif isinstance(v, dict) and isinstance(v.get("points"), list):
         pts = v["points"]
         ppath = path + ("points",)
+        if _check_bp_groups(bag, ppath, pts, dotted, dotted, grain_unit):
+            return
     if not pts:
         return
     for i, p in enumerate(pts):
@@ -1804,6 +1965,17 @@ def _check_compact_knob(bag: Bag, path: KeyPath, spec: Any, label: str) -> None:
                 code="compact-end-time", prefer_value=True,
                 data={"fix": {"kind": "rename-value", "new": "1"}})
     for i, p in enumerate(spec[0]):
+        # un BP group dentro il pattern e' una lista a 2 elementi, quindi
+        # passerebbe il controllo sulle coppie: l'annidamento non esiste (PGE
+        # #64), ne' gruppi dentro pattern compatti ne' viceversa
+        if is_bp_group(p):
+            bag.add(path + (0, i),
+                    f"{label}: forma compatta, il punto {i} del pattern e' un "
+                    "BP group '[points, interp]' — l'annidamento non esiste. "
+                    "L'interpolazione della forma compatta e' il suo quarto "
+                    "elemento posizionale.",
+                    code="bp-group-nested", prefer_value=True)
+            continue
         if len(p) != 2:
             bag.add(path + (0, i),
                     f"{label}: forma compatta, i punti del pattern devono "

@@ -159,6 +159,39 @@ DURATION_DEPRECATED_DOC = (
     "(`study_spec.reject_top_level_duration`), anche dentro `versions:` e "
     "`percorso:`. Quick fix disponibile: spostala dove ora vive."
 )
+# BP group dell'engine (``yaml.md`` §2.7, PGE #64): come la forma compatta e'
+# posizionale, quindi la doc e' una legenda — e la cosa da dire subito e' che i
+# tempi sono assoluti, perche' e' l'unica forma di envelope dove NON sono ne'
+# percentuali del ciclo ne' normalizzati.
+BP_GROUP_DOC = (
+    "**BP group** — `[points, interp]`: un run di breakpoint avvolto in un "
+    "gruppo che dichiara l'interpolazione della **propria macrozona**, "
+    "simmetrico ai loop block. Si usa da solo (envelope a una zona) o dentro "
+    "un envelope misto, accanto a loop block e breakpoint nudi:\n\n"
+    "```yaml\n"
+    "density: [[[0.0, 0], [0.5, 30], [1.0, 5]], 'cubic']\n"
+    "density: [\n"
+    "  [[[0.0, 0], [0.2, 12]], 'cubic'],      # macrozona cubic\n"
+    "  [[[0, 8], [50, 18], [100, 8]], 0.7, 4, 'linear'],   # loop block\n"
+    "  [[[0.75, 6], [1.0, 0]], 'step'],       # macrozona step\n"
+    "]\n"
+    "```\n\n"
+    "- i `points` sono `[t, v]` o `[t, v, type]` con **tempi assoluti** — non "
+    "percentuali del ciclo come il `pattern` della forma compatta;\n"
+    "- `interp` = `linear` | `cubic` | `step`, e governa i soli segmenti "
+    "**interni**: n punti = n-1 segmenti (quindi un gruppo con meno di 2 punti "
+    "e' un errore). Il gap in uscita resta al default globale, e l'interp del "
+    "gruppo **non** diventa il tipo globale dell'envelope;\n"
+    "- un `type` per-punto fa override dell'interp del gruppo per il suo "
+    "segmento;\n"
+    "- se il primo punto non e' oltre l'ultimo breakpoint della zona "
+    "precedente, l'engine trasla il bordo di `DISCONTINUITY_OFFSET` **senza "
+    "segnalarlo** (come per i loop block);\n"
+    "- niente annidamento: ne' gruppi dentro pattern compatti ne' viceversa.\n\n"
+    "Disambiguazione: il BP group e' l'unica lista a **2 elementi** con il "
+    "primo lista di punti e il secondo stringa (un breakpoint `[t, v]` ha il "
+    "primo numerico, un loop block ha 3-6 elementi)."
+)
 # ``spread.n`` come Env: il coro cresce e cala nel tempo. Il pezzo che sorprende
 # non e' la sintassi ma la conseguenza sul volume, quindi la doc la dice subito.
 SPREAD_N_ENV_DOC = (
@@ -262,7 +295,9 @@ _ENGINE_STREAM_KEYS = [
                     "(default): identita' = `stream_id`, isolamento per-stream. "
                     "Richiede `seed:` engine per la riproducibilita' fra run. "
                     "Limite: con `density`/`distribution` diverse le griglie IOT si "
-                    "desincronizzano pur condividendo l'RNG.", kind="string"),
+                    "desincronizzano pur condividendo l'RNG.\n\n"
+                    "Entra nel **fingerprint della cache stems**: cambiarlo rende "
+                    "lo stem dirty, quindi il render lo rifa'.", kind="string"),
     _k("solo", "Solo gli stream con questo flag vengono renderizzati."),
     _k("mute", "Stream ignorato (salvo solo mode). In stack e' il gate "
                "d'ascolto: si esclude uno stream mutandolo col volume."),
@@ -573,8 +608,10 @@ _SPREAD_STRATEGY_KEYS = _ENV_KEYS  # values | ramp | banda | expr (+n/seed/...)
 _ENGINE_ENV_KEYS = [
     _k("type", "Interpolazione: linear (default) | cubic (Fritsch-Carlson, "
                "monotona) | step (hold-left).", values=EI.INTERPOLATIONS),
-    _k("points", "Breakpoint `[[t, v], ...]`; ammessi `[t, v, type]` per-punto "
-                 "e formati compatti `[pattern, end_time, n_reps, ...]`."),
+    _k("points", "Breakpoint `[[t, v], ...]`; ammessi `[t, v, type]` per-punto, "
+                 "formati compatti `[pattern, end_time, n_reps, ...]` e **BP "
+                 "group** `[points, interp]` (macrozona con interpolazione "
+                 "propria, tempi assoluti)."),
     _k("time_mode", "Override locale: absolute (secondi) | normalized ([0,1] "
                     "su duration).", values=EI.TIME_MODES),
     _k("time_unit", "Alias locale di time_mode.", values=EI.TIME_MODES),
