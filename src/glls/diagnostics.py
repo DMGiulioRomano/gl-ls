@@ -175,19 +175,36 @@ def _check_stack_duration(bag: Bag, doc: Document, m: StudyModel) -> None:
     per catena (``duration:`` di entry > ``base.duration``), con la durata di
     replica di ``versions:``/``percorso:`` come default. L'errore va emesso
     solo quando NESSUNA fonte la risolve — e va puntato su ``base.duration``,
-    che e' il posto dove si scrive il default."""
-    if not m.has_stack or m.declares_duration():
+    che e' il posto dove si scrive il default.
+
+    Nemmeno la *presenza* dello stack e' un fatto di documento. Il runtime
+    valida il documento **merged per stream** (``study_spec:836``), dove la
+    ``stack:`` di una entry e' diventata top-level: il processo puo' essere
+    attivo per un solo stream. Col blocco top-level ci sono dentro tutti (e'
+    attivo per presenza, anche ``stack: {}``), senza, solo chi ne dichiara uno
+    proprio."""
+    if m.declares_duration():
+        return
+    remedy = ("Dichiara 'base: {duration: <secondi>}' (default per tutti gli "
+              "stream) oppure 'duration:' nella entry dello stream.")
+    if not m.has_stack:
+        # Solo gli stream che portano un ``stack:`` loro sono nel processo.
+        for name, si in m.streams.items():
+            if si.declares_stack and not si.declares_duration:
+                bag.add(("streams", name),
+                        f"stack: lo stream '{name}' dichiara un blocco 'stack:' "
+                        "proprio ma non risolve nessuna 'duration' (ne' propria "
+                        f"ne' ereditata da 'base.duration'). {remedy}",
+                        code="stack-duration",
+                        data={"fix": {"kind": "add-base-duration"}})
         return
     # Nessun default di documento: sono in errore gli stream che non ne
     # dichiarano una propria. Con ``streams:`` popolato l'errore e' loro, uno
     # per uno; senza streams e' del documento.
-    orphans = [name for name, si in m.streams.items() if not si.declares_duration]
-    remedy = ("Dichiara 'base: {duration: <secondi>}' (default per tutti gli "
-              "stream) oppure 'duration:' nella entry dello stream.")
-    if m.streams and not orphans:
-        return
     if m.streams:
-        for name in orphans:
+        for name, si in m.streams.items():
+            if si.declares_duration:
+                continue
             bag.add(("streams", name),
                     f"stack: lo stream '{name}' non risolve nessuna 'duration' "
                     f"(ne' propria ne' ereditata da 'base.duration'). {remedy}",
@@ -341,6 +358,38 @@ def _generator_from_streams(doc: Document, m: StudyModel, axis: str) -> bool:
     return True
 
 
+def _n_uncovered_streams(doc: Document, m: StudyModel, axis: str) -> List[str]:
+    """Gli stream per cui una banda-Y senza ``n`` resta scoperta.
+
+    Gemello di :func:`_generator_from_streams`, sull'altra meta' della
+    n-ownership: una banda senza ``n`` pretende che sia la camminata-X a
+    possedere il conteggio, e il runtime lo verifica sul documento *merged* per
+    stream. La camminata puo' quindi essere dichiarata nell'override invece che
+    nel blocco ``stack:`` di documento — e, all'inverso, un override puo'
+    *toglierla* con ``asse: null`` e scoprire quello stream soltanto.
+
+    Coperto anche uno stream che scrive un ``n`` proprio sull'asse, o che ne
+    rimpiazza il generatore con uno che enumera (``values``/``ramp``): li' la
+    banda senza ``n`` non c'e' piu', e questa regola non lo riguarda.
+
+    Lista vuota = nessuno scoperto. Senza ``streams:`` decide il documento."""
+    if not m.streams:
+        return [] if m.walk_for(axis) is not None else ["(documento)"]
+    global_spread = doc.get(("spread",))
+    out: List[str] = []
+    for info in m.streams.values():
+        if m.walk_in_stream(axis, info.name):
+            continue
+        cfg = info.cfg if isinstance(info.cfg, dict) else {}
+        spread = (_merged_spread(global_spread, cfg.get("spread"))
+                  if "spread" in cfg else None)
+        paths = _axis_write_paths(cfg, spread)
+        if any(f"{axis}.{mk}" in paths for mk in ("n", "values", "ramp")):
+            continue
+        out.append(info.name)
+    return out
+
+
 def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
     axes = doc.get(("axes",))
     if not isinstance(axes, dict):
@@ -420,11 +469,21 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
         walk = m.walk_for(name)
         if markers == ["base"]:
             _check_band(bag, doc, apath, cfg, f"Asse '{name}'")
-            if "n" not in cfg and walk is None:
+            uncovered = ([] if "n" in cfg
+                         else _n_uncovered_streams(doc, m, name))
+            if uncovered:
+                # se la camminata di documento c'e' ed e' un override a
+                # toglierla, dirlo: altrimenti il messaggio sembra sbagliato
+                # ("ma io il blocco stack ce l'ho")
+                who = ""
+                if walk is not None:
+                    who = (" Gli stream che la annullano (o non la ereditano): "
+                           + ", ".join(f"'{s}'" for s in uncovered) + ".")
                 bag.add(apath,
                         f"Asse '{name}': banda senza 'n' richiede la camminata-X "
                         f"nel blocco 'stack:' (n-ownership: e' la X a possedere n). "
-                        f"Dichiara 'n' oppure 'stack: {{{name}: {{base: ...}}}}'.",
+                        f"Dichiara 'n' oppure 'stack: {{{name}: {{base: ...}}}}'."
+                        + who,
                         code="n-ownership",
                         data={"fix": {"kind": "add-n", "path": list(apath)}})
         elif markers and walk is not None:

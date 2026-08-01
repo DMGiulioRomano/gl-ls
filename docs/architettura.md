@@ -41,6 +41,14 @@ Tre strati, tutti puri e testabili senza LSP:
   con l'ultimo valore visto; una differenza arma la code action "riscala
   vecchio -> nuovo" finche' non si torna al valore di partenza. Nessun
   protocollo extra, funziona con qualsiasi client.
+- **Lo stato del processo si legge per stream, non per documento**: il runtime
+  valida il documento *merged* di ogni entry di `streams:`, dove il blocco
+  `stack:` (o `duration:`) dell'override e' diventato top-level. Le domande
+  "c'e' lo stack?" e "questo asse ha una camminata?" hanno quindi una risposta
+  per stream — `StreamInfo.declares_stack`/`stack_paths`/`stack_nulled` e
+  `StudyModel.walk_in_stream` — e le tre risposte possibili (dichiarata,
+  ereditata, annullata con `asse: null`) sono tutte e tre diverse. Leggerle sul
+  documento base costava un falso positivo e due falsi negativi.
 - **La durata e' per-stream** (granstudies #42): non esiste una durata di
   documento dichiarata — quella e' dedotta, `max(onset + duration)`. Il
   modello espone una catena (`StudyModel.duration_for(stream)`: `duration:` di

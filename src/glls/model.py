@@ -64,6 +64,21 @@ class StreamInfo:
     # se la entry non ne dichiara nessuna: erediterebbe quella di documento.
     duration: Optional[float] = None
     declares_duration: bool = False       # dichiarata, anche se non statica
+    # La entry porta un blocco ``stack:`` proprio (annidato o in chiavi
+    # puntate). Dopo il merge quel blocco e' top-level del documento dello
+    # stream, quindi il processo stack e' attivo per LUI anche se il documento
+    # base non ha nessun ``stack:``.
+    declares_stack: bool = False
+    # I path — relativi a ``stack.`` — che la entry scrive, con ogni prefisso
+    # (``grain.duration.range`` porta anche ``grain``, ``grain.duration``):
+    # cosi' il confine dei nomi d'asse dotted non va risolto. Una camminata
+    # annullata (``asse: null``) non c'e': la forma serve proprio a riportare
+    # l'asse a linear.
+    stack_paths: frozenset = frozenset()
+    # Gli assi che la entry riporta a linear con ``asse: null``. Non e'
+    # l'inverso di ``stack_paths``: "assente" e "annullata" sono cose diverse —
+    # assente eredita la camminata di documento, annullata la toglie.
+    stack_nulled: frozenset = frozenset()
 
 
 @dataclass
@@ -100,6 +115,23 @@ class StudyModel:
 
     def walk_for(self, axis: str) -> Optional[WalkInfo]:
         return self.walks.get(axis)
+
+    def walk_in_stream(self, axis: str, stream: str) -> bool:
+        """True se ``axis`` ha una camminata-X nel documento *merged* di
+        ``stream`` — quello che il runtime valida davvero.
+
+        Il blocco ``stack:`` di un override e' un fatto dello stream: dopo il
+        merge diventa top-level del suo documento. Tre esiti, e sono tutti e
+        tre diversi: la entry dichiara la camminata (vale), non ne parla
+        (eredita quella di documento), la annulla con ``asse: null`` (la
+        toglie, l'asse torna linear per lui). ``walk_for`` risponde per il
+        documento base, questa per uno stream."""
+        si = self.streams.get(stream)
+        if si is None:
+            return self.walk_for(axis) is not None
+        if any(p == axis or p.startswith(f"{axis}.") for p in si.stack_paths):
+            return True
+        return self.walk_for(axis) is not None and axis not in si.stack_nulled
 
     # ---- durata (granstudies #42) -------------------------------------
     # Ogni ``duration`` sta accanto alla cosa di cui e' la durata, e quella di
@@ -348,6 +380,57 @@ def is_bp_group(spec: Any) -> bool:
         and all(isinstance(p, (list, tuple)) for p in spec[0])
         and isinstance(spec[1], str)
     )
+
+
+def stack_paths_of(cfg: Dict[str, Any]) -> frozenset:
+    """I path scritti sotto ``stack.`` da una entry di ``streams:``.
+
+    Forma annidata (``stack: {density: {...}}``) e chiavi puntate
+    (``stack.density.base``) sono la stessa cosa dopo ``_expand_dotted_keys``
+    del runtime. Si raccoglie **ogni prefisso** — come ``_axis_write_paths`` fa
+    per ``axes.`` — cosi' un asse dotted (``grain.duration``) si riconosce per
+    confronto diretto senza dover risolvere dove finisce il suo nome.
+
+    Una entry annullata (``asse: null``) viene scartata: e' la forma con cui un
+    override riporta a linear una camminata ereditata, quindi *toglie* la
+    camminata invece di dichiararla.
+    """
+    out: set = set()
+
+    def walk(prefix: str, node: Any) -> None:
+        if prefix:
+            out.add(prefix)
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if isinstance(k, str) and v is not None:
+                    walk(f"{prefix}.{k}" if prefix else k, v)
+
+    for key, value in cfg.items():
+        if (isinstance(key, str) and key.startswith("stack.")
+                and len(key) > len("stack.") and value is not None):
+            walk(key[len("stack."):], value)
+    nested = cfg.get("stack")
+    if isinstance(nested, dict):
+        walk("", nested)
+    return frozenset(out)
+
+
+def stack_nulled_of(cfg: Dict[str, Any]) -> frozenset:
+    """Gli assi che una entry riporta a linear con ``asse: null``.
+
+    Il runtime scarta le entry annullate (``study_spec._stack_config``): dopo
+    il merge quell'asse non ha piu' camminata, quindi per QUELLO stream la
+    n-ownership torna alla Y. Va tenuto distinto dall'asse semplicemente
+    assente dall'override, che invece eredita la camminata di documento."""
+    out: set = set()
+    nested = cfg.get("stack")
+    if isinstance(nested, dict):
+        out |= {k for k, v in nested.items() if isinstance(k, str) and v is None}
+    for key, value in cfg.items():
+        if (isinstance(key, str) and key.startswith("stack.")
+                and len(key) > len("stack.") and value is None):
+            out.add(key[len("stack."):])
+    return frozenset(out)
 
 
 def looks_like_bp_group(spec: Any) -> bool:
@@ -630,9 +713,13 @@ def build(doc: Document) -> StudyModel:
             declared = any(key in node for node, key in sources)
             dur = next((_num(node[key]) for node, key in sources
                         if key in node and _num(node[key]) is not None), None)
+            declares_stack = "stack" in cfg or any(
+                isinstance(k, str) and k.startswith("stack.") for k in cfg)
             m.streams[name] = StreamInfo(
                 name=name, cfg=cfg, doc_path=("streams", name),
                 is_spread=is_spread, spread_n=n,
                 duration=dur, declares_duration=declared,
+                declares_stack=declares_stack, stack_paths=stack_paths_of(cfg),
+                stack_nulled=stack_nulled_of(cfg),
             )
     return m
