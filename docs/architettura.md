@@ -36,11 +36,23 @@ Tre strati, tutti puri e testabili senza LSP:
 - **Ricalcoli come code action con TextEdit**, non come comandi custom: cosi'
   funzionano in ogni client senza supporto speciale (`workspace/applyEdit`
   non serve, l'edit viaggia nella risposta).
-- **Memoria delle duration**: al parse il server confronta `base.duration`
-  (e la `duration:` top-level, ormai vietata ma ancora scrivibile per errore)
+- **Memoria delle duration**: al parse il server confronta ogni durata
+  dichiarata — `base.duration` e quella propria di ogni entry di `streams:` —
   con l'ultimo valore visto; una differenza arma la code action "riscala
   vecchio -> nuovo" finche' non si torna al valore di partenza. Nessun
-  protocollo extra, funziona con qualsiasi client.
+  protocollo extra, funziona con qualsiasi client. La chiave della memoria e'
+  un **key-path**, non una stringa: le durate per-stream vivono sotto un nome
+  libero che puo' contenere punti, e una stringa andrebbe riparsata. La
+  `duration:` top-level non si segue: e' vietata, e ha gia' due quick fix che
+  la spostano.
+- **La riscala ha uno scope**, non solo un fattore: `_roots_inheriting` e' la
+  catena di `duration_for` letta al contrario — non "da dove viene la durata di
+  questo stream" ma "di chi e' la durata che ho in mano". `base.duration` e' un
+  *default*, quindi vale per il documento e per gli stream che non ne
+  dichiarano una propria; la `duration:` di una entry vale per lei sola.
+  Riscalare tutti i blocchi `base:` era corretto finche' la durata era una
+  sola, e con la durata per-stream sposta breakpoint di stream la cui timeline
+  non e' cambiata.
 - **Lo stato del processo si legge per stream, non per documento**: il runtime
   valida il documento *merged* di ogni entry di `streams:`, dove il blocco
   `stack:` (o `duration:`) dell'override e' diventato top-level. Le domande

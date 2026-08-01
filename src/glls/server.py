@@ -30,10 +30,14 @@ class GllsServer(LanguageServer):
         self.docs: Dict[str, yamlpos.Document] = {}
         self.models: Dict[str, model_mod.StudyModel] = {}
         self.diags: Dict[str, List[types.Diagnostic]] = {}
-        # uri -> {"duration"|"base.duration": valore corrente}
-        self.durations: Dict[str, Dict[str, float]] = {}
-        # uri -> {chiave: (vecchio, nuovo)} per la code action di riscala
-        self.pending_durations: Dict[str, Dict[str, Tuple[float, float]]] = {}
+        # uri -> {key-path della durata: valore corrente}. La chiave e' il
+        # key-path e non una stringa perche' le durate per-stream vivono sotto
+        # un nome libero (``streams.<nome>.duration``) che puo' contenere punti:
+        # una stringa andrebbe riparsata, e male.
+        self.durations: Dict[str, Dict[yamlpos.KeyPath, float]] = {}
+        # uri -> {key-path: (vecchio, nuovo)} per la code action di riscala
+        self.pending_durations: Dict[
+            str, Dict[yamlpos.KeyPath, Tuple[float, float]]] = {}
 
     # ------------------------------------------------------------------
     def refresh(self, uri: str, text: str, version: Optional[int] = None) -> None:
@@ -50,11 +54,20 @@ class GllsServer(LanguageServer):
         )
 
     def _track_durations(self, uri: str, m: model_mod.StudyModel) -> None:
-        current = {}
-        if m.duration is not None:
-            current["duration"] = m.duration
+        """Memoria delle durate per la code action di riscala.
+
+        Si seguono tutte le durate *dichiarate*, non una sola: il default di
+        documento (``base.duration``) e quella propria di ogni entry di
+        ``streams:``, che dopo granstudies #42 e' la forma dell'override. La
+        ``duration:`` top-level non si segue piu': e' una chiave vietata, con
+        una diagnostica e due quick fix che la spostano — armarci sopra un
+        refactor incoraggerebbe a lasciarla dov'e'."""
+        current: Dict[yamlpos.KeyPath, float] = {}
         if m.base_duration is not None:
-            current["base.duration"] = m.base_duration
+            current[("base", "duration")] = m.base_duration
+        for name, si in m.streams.items():
+            if si.duration is not None and si.duration_path is not None:
+                current[("streams", name) + tuple(si.duration_path)] = si.duration
         previous = self.durations.get(uri)
         pending = self.pending_durations.setdefault(uri, {})
         if previous is not None:

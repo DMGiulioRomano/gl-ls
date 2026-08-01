@@ -198,14 +198,20 @@ def _scale_env_list(doc: Document, path: KeyPath, value: list,
 
 
 def duration_actions(doc: Document, m: StudyModel, uri: str, rng: types.Range,
-                     pending: Dict[str, Tuple[float, float]]
+                     pending: Dict[KeyPath, Tuple[float, float]]
                      ) -> List[types.CodeAction]:
-    """Riscala i tempi assoluti quando duration e' cambiata (memoria server)."""
+    """Riscala i tempi assoluti quando una duration e' cambiata (memoria server).
+
+    La chiave di ``pending`` e' il key-path della durata cambiata, e serve per
+    due cose diverse: ancorare l'azione alla riga giusta e — soprattutto —
+    decidere **quali** envelope vivono su quella durata. Riscalare tutti i
+    blocchi ``base:`` del documento era corretto quando la durata era una
+    sola; con la durata per-stream (granstudies #42) sposta i breakpoint di
+    stream la cui timeline non e' cambiata affatto."""
     out: List[types.CodeAction] = []
-    for key, (old, new) in pending.items():
+    for dpath, (old, new) in pending.items():
         if old <= 0 or new <= 0 or old == new:
             continue
-        dpath: KeyPath = ("duration",) if key == "duration" else ("base", "duration")
         entry = doc.entry(dpath)
         if entry is None:
             continue
@@ -217,7 +223,7 @@ def duration_actions(doc: Document, m: StudyModel, uri: str, rng: types.Range,
             continue
         factor = new / old
         edits: List[types.TextEdit] = []
-        for base_root in _base_roots(doc):
+        for base_root in _roots_inheriting(doc, m, dpath):
             edits.extend(_envelope_time_edits(doc, base_root, factor,
                                               _root_time_mode(doc, base_root,
                                                               m.time_mode)))
@@ -237,13 +243,33 @@ def _root_time_mode(doc: Document, root: KeyPath, default: str) -> str:
     return tm if tm in ("absolute", "normalized") else default
 
 
-def _base_roots(doc: Document) -> List[KeyPath]:
+def _roots_inheriting(doc: Document, m: StudyModel,
+                      changed: KeyPath) -> List[KeyPath]:
+    """I blocchi ``base:`` i cui envelope vivono sulla durata cambiata.
+
+    E' la catena di ``StudyModel.duration_for`` letta al contrario: invece di
+    «da dove viene la durata di questo stream», «di chi e' la durata che ho in
+    mano». Due casi:
+
+    - ``streams.<nome>.duration`` (o la sua ``base.duration``): riguarda quel
+      solo stream, e nessun altro;
+    - ``base.duration``: e' il **default** di documento, quindi vale per il
+      blocco ``base:`` e per gli stream che non ne dichiarano una propria. Uno
+      stream con la sua ``duration:`` non eredita niente e va lasciato stare —
+      riscalarlo sposterebbe breakpoint su una timeline che non si e' mossa.
+    """
+    if changed[:1] == ("streams",) and len(changed) >= 2:
+        root: KeyPath = ("streams", changed[1], "base")
+        return [root] if isinstance(doc.get(root), dict) else []
     roots: List[KeyPath] = []
     if isinstance(doc.get(("base",)), dict):
         roots.append(("base",))
     streams = doc.get(("streams",))
     if isinstance(streams, dict):
         for name, cfg in streams.items():
+            si = m.streams.get(name)
+            if si is not None and si.declares_duration:
+                continue
             if isinstance(cfg, dict) and isinstance(cfg.get("base"), dict):
                 roots.append(("streams", name, "base"))
     return roots

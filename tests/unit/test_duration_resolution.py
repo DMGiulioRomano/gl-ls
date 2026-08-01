@@ -66,6 +66,39 @@ def test_versions_duration_is_the_document_default():
     assert m.replica_duration_source == "versions.duration"
 
 
+def test_replica_duration_overwrites_base_duration():
+    # i due rami non affiancano base.duration, la SOVRASCRIVONO nel documento
+    # per-combo: `data_k["base"] = {**base, "duration": durations[k]}`. Con
+    # entrambe dichiarate, il base.duration scritto a mano non arriva a valle.
+    _doc, m = _dm(BASE + "versions:\n  duration: 50\n  d0: {values: [1, 2]}\n")
+    assert m.base_duration == 6.0
+    assert m.duration_for() == 50.0
+
+
+def test_entry_duration_still_wins_over_the_replica():
+    _doc, m = _dm(BASE + """versions:
+  duration: 50
+  d0: {values: [1, 2]}
+streams:
+  a:
+    duration: 12
+""")
+    assert m.duration_for("a") == 12.0
+    assert m.duration_for() == 50.0
+
+
+def test_a_non_static_stream_duration_resolves_to_nothing():
+    # dichiarata ma non e' un numero: il default di documento non vale per lei,
+    # e rispondere col default sarebbe un numero che il runtime non usa mai
+    _doc, m = _dm(BASE + """streams:
+  a:
+    duration: {expr: "d * 2"}
+""")
+    assert m.streams["a"].declares_duration is True
+    assert m.duration_for("a") is None
+    assert m.duration_for() == 6.0
+
+
 def test_percorso_declares_a_replica_duration_even_when_implicit():
     # senza ``percorso.duration`` le istanze sono legate: la durata e'
     # l'intervallo verso la prossima, dedotto da arco/passo
