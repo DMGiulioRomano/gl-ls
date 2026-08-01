@@ -76,6 +76,16 @@ Tre strati, tutti puri e testabili senza LSP:
 - **expr valutate davvero** in diagnostica, con la stessa grammatica
   whitelist del runtime (`exprlang` e' un port di `granstudies.expr`): il
   messaggio d'errore nell'editor coincide con quello di `make stack`.
+- **Contratto sui codici, non dipendenza dal runtime** (`codes.py`).
+  `granulation-studies` espone i propri controlli non fatali come funzioni pure
+  con codici stabili, e importarli toglierebbe la duplicazione — ma il server
+  e' solo stdlib + pygls di proposito, perche' gira dentro l'editor, e
+  dipenderne legherebbe le versioni dei due repo. Si condivide invece la cosa
+  su cui un consumatore **agisce**: il nome della regola. I codici condivisi
+  stanno in `codes.SHARED`, fissati alla lettera da `test_codici.py`, che
+  quando `granstudies` e' importabile verifica anche l'accordo con il runtime e
+  segnala i codici nuovi non ancora dichiarati. In CI quella verifica si salta:
+  e' precisamente il punto: la dipendenza non c'e'.
 
 ## Limiti noti
 
@@ -101,6 +111,8 @@ Tre strati, tutti puri e testabili senza LSP:
   `convert._TO_HZ`/`_FROM_HZ` + test in `test_convert.py`.
 - **Nuova regola di diagnostica**: una funzione in `diagnostics.py` che
   aggiunge al `Bag`, con `code` stabile; se ha un fix, `data={"fix": ...}` e
-  il ramo corrispondente in `actions.quickfixes`.
+  il ramo corrispondente in `actions.quickfixes`. Se il runtime emette la
+  stessa regola, il codice va in `codes.SHARED` con la stessa stringa; se la
+  anticipa e basta, in `codes.STATIC_ONLY`, dove il nome e' libero.
 - **Nuova chiave del DSL**: una `Key` nel contesto giusto di `schema.py`
   (doc markdown inclusa): completion e hover la vedono da sole.

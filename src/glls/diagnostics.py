@@ -17,7 +17,7 @@ from lsprotocol import types
 
 from . import engine_info as EI
 from .convert import as_num as _num
-from . import exprlang, schema
+from . import codes, exprlang, schema
 from .model import (
     AXES_RESERVED,
     GEN_MARKERS,
@@ -2273,11 +2273,11 @@ def _check_let_corredi(bag: Bag, doc: Document, kp: KeyPath, blocco: Any,
                         f"spread.let: '{nome}' dichiara un corredo — a livello "
                         "di voce 'i' e' gia' fissato, quindi una lista qui non "
                         "avrebbe nessun indice da cui essere letta.",
-                        code="corredo", prefer_value=True)
+                        code=codes.CORREDO, prefer_value=True)
                 continue
             problema = _corredo_problema(nome, val)
             if problema:
-                bag.add(qui, problema, code="corredo", prefer_value=True)
+                bag.add(qui, problema, code=codes.CORREDO, prefer_value=True)
             continue
         if isinstance(val, dict) and exprlang.CYCLE_KEY in val \
                 and not exprlang.is_expr_node(val):
@@ -2285,14 +2285,14 @@ def _check_let_corredi(bag: Bag, doc: Document, kp: KeyPath, blocco: Any,
                     f"let: '{nome}' dichiara 'cycle' senza 'list' — 'cycle' e' "
                     "la politica di un corredo (accordo o pattern), non un "
                     "valore a se'.",
-                    code="corredo", prefer_value=True)
+                    code=codes.CORREDO, prefer_value=True)
             continue
         if voce:
             continue
         # Famiglia 1 in posizione di Famiglia 2: in un ``let:`` la posizione
         # non disambigua i due ruoli di una lista, quindi va marcato.
         if _is_generator_node(val) and not exprlang.is_expr_node(val):
-            bag.add(qui, _migrazione_linear_env(val), code="linear-env-migrazione",
+            bag.add(qui, _migrazione_linear_env(val), code=codes.LINEAR_ENV_MIGRAZIONE,
                     prefer_value=True)
 
 
@@ -2397,7 +2397,7 @@ def _check_corredi_mossi(bag: Bag, doc: Document) -> None:
                         f"percorso: '{nome}' e' dichiarato come corredo nel "
                         "'let:' — una traiettoria e' una legge sul tempo, non "
                         "una lista, e il tipo lo fissa la dichiarazione.",
-                        code="corredo-mosso", prefer_value=True)
+                        code=codes.CORREDO_MOSSO, prefer_value=True)
 
 
 def _walk_versions(bag: Bag, nodo: Any, dichiarati: Dict[str, Any],
@@ -2421,7 +2421,7 @@ def _check_sostituzione(bag: Bag, nome: str, dichiarato: Any, mosso: Any,
                 f"versions: '{nome}' e' dichiarato come corredo nel 'let:', ma "
                 f"questo stato lo sostituisce con {mosso!r} — 'versions:' muove "
                 "il valore di una manopola, mai il suo tipo.",
-                code="corredo-mosso", prefer_value=True)
+                code=codes.CORREDO_MOSSO, prefer_value=True)
         return
     if exprlang.is_cyclic(mosso) != exprlang.is_cyclic(dichiarato):
         atteso = ("un pattern (cycle: true)" if exprlang.is_cyclic(dichiarato)
@@ -2430,7 +2430,7 @@ def _check_sostituzione(bag: Bag, nome: str, dichiarato: Any, mosso: Any,
                 f"versions: '{nome}' e' dichiarato come {atteso} nel 'let:', "
                 "ma questo stato ne cambia la politica di 'cycle' — la "
                 "dichiarazione fissa il tipo, 'versions:' muove solo il valore.",
-                code="corredo-mosso", prefer_value=True)
+                code=codes.CORREDO_MOSSO, prefer_value=True)
 
 
 def _check_corredi_consumo(bag: Bag, doc: Document) -> None:
@@ -2480,7 +2480,7 @@ def _check_corredi_consumo(bag: Bag, doc: Document) -> None:
                     f"il corredo '{var}' del gruppo '{nome}' ha {len(elems)} "
                     f"elementi, ma lo spread genera {n} voci: {coda}",
                     types.DiagnosticSeverity.Warning,
-                    code="corredo-sotto-consumato", prefer_value=True)
+                    code=codes.CORREDO_SOTTO_CONSUMATO, prefer_value=True)
 
 
 def _corredi_di(blocco: Any) -> Dict[str, Any]:
@@ -2565,7 +2565,7 @@ def _check_linear_env_ruolo(bag: Bag, doc: Document) -> None:
                 f"i breakpoint di un envelope), ma {dove} la lista si legge "
                 "**per indice** — la posizione k e' l'elemento k. Dichiara il "
                 "generatore direttamente: 'values', 'ramp' o una banda.",
-                code="linear-env-ruolo", prefer_value=True)
+                code=codes.LINEAR_ENV_RUOLO, prefer_value=True)
 
     axes = doc.get(("axes",))
     if isinstance(axes, dict):
