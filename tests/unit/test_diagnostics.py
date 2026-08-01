@@ -1745,7 +1745,7 @@ def test_spread_let_read_by_group_axis():
     text = BASE + """streams:
   fan:
     let:
-      respiro: {base: 20, range: 1}
+      respiro: {linear_env: {base: 20, range: 1}}
     axes:
       density:
         base:

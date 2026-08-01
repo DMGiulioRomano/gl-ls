@@ -123,9 +123,16 @@ _ENV_KEYS = [
        snippet="drift:\n  step: ${1:0.1}"),
     _k("expr", _GEN_DOC["expr"], kind="macro", snippet='expr: "${1:env * 50}"'),
     _k("let", _GEN_DOC["let"], kind="macro"),
-    # I due wrapper di ruolo. Il vocabolario sopra dice **da dove vengono i
-    # numeri**; questi dicono **come si leggono**: `linear_env:` per tempo,
-    # `list:` per indice. `cycle` e' la politica del corredo e vive con `list`.
+]
+
+# I wrapper di **ruolo**, che non appartengono al vocabolario condiviso: quello
+# dice da dove vengono i numeri, questi dicono come si leggono. Valgono dove la
+# lista si legge **per tempo** o **per indice per nome** — il valore di una
+# manopola di ``let:`` e i bordi di un ``Env`` — e **non** in Famiglia 1, dove
+# la posizione gia' disambigua: assi, strategy di ``spread.over``, ``versions``
+# Forma 1, ``percorso.onset``. Proporli li' sarebbe suggerire l'errore che il
+# runtime rifiuta.
+_ROLE_KEYS = [
     _k("linear_env", _GEN_DOC["linear_env"], kind="macro",
        snippet="linear_env: [${1:0}, ${2:1}, ${3:0}]"),
     _k("list", _GEN_DOC["list"], kind="macro",
@@ -677,7 +684,7 @@ CONTEXTS: Dict[str, List[Key]] = {
     "engine_env": _ENGINE_ENV_KEYS,
     "axes": _AXES_RESERVED,          # + nomi d'asse liberi
     "axis": _AXIS_KEYS,
-    "env": _ENV_KEYS,
+    "env": _ENV_KEYS + _ROLE_KEYS,
     "ramp": _RAMP_KEYS,
     "drift": _DRIFT_KEYS,
     "sweep": _SWEEP_KEYS,
