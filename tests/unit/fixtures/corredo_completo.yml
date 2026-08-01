@@ -1,0 +1,40 @@
+study_id: glls_probe
+title: "sonda corredo per gl-ls"
+seed: 1988
+samples_dir: samples
+base:
+  onset: 0
+  duration: 6
+  sample: silenzi.wav
+  time_mode: normalized
+  grain: {envelope: hanning}
+  volume: -6
+  pointer: {speed_ratio: 0, start: .3}
+let:
+  d: 1
+  ratio: {list: [2, 3, 4, 7]}
+  durate: {list: [1, 1, 2], cycle: true}
+  sagoma: {linear_env: [0, 1, 0]}
+axes:
+  density:
+    baseline: 20
+    base: 20
+    range: 40
+  grain.duration:
+    baseline: 0.01
+    n: 6
+    base: {expr: "d * ratio[0] / 40"}
+    range: {expr: "sagoma * 0.001"}
+stack:
+  density: {unit: s, base: 0.5, range: 1.5}
+streams:
+  cugini:
+    spread:
+      n: {expr: "len(ratio)"}
+      let:
+        r: {expr: "ratio[i]"}
+        dur: {expr: "durate[i]"}
+      over:
+        base.pointer.start: {ramp: {start: 0.1, step: 0.2}}
+    stack:
+      density: {unit: s, base: {expr: "d * r * dur"}}

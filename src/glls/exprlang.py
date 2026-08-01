@@ -75,7 +75,46 @@ _FUNCTIONS = {
     # ``mix`` ha un ramo dedicato in ``_call`` (accetta Env multipli: e'
     # l'unica porta Env con Env); qui vive per la whitelist e l'arieta'.
     "mix": (None, 3, 3),
+    # ``len`` ha un ramo dedicato in ``_call``, *prima* della valutazione degli
+    # argomenti: ``_eval`` su un nome-corredo e' errore (una lista non e' un
+    # valore), e ``len`` e' l'unica funzione che di un corredo vive.
+    "len": (None, 1, 1),
 }
+
+# --- il corredo: una lista nominata, letta per indice -------------------------
+#
+# Port di ``granstudies.expr``. Un corredo resta il dict ``{list: [...]}`` anche
+# dopo la risoluzione: una lista non e' un valore, quindi non c'e' niente in cui
+# trasformarla, e la forma-dict e' quella che sopravvive alla serializzazione
+# dei documenti intermedi.
+CORREDO_KEY = "list"
+
+# La politica del corredo. Non e' un flag di comodo: sono due oggetti
+# compositivi diversi. Un **accordo** e' un insieme fisso di rapporti — se ne
+# chiedi il quinto, la domanda e' sbagliata. Un **pattern** e' periodico per
+# natura — il quinto elemento *e'* il primo, come in un ciclo ritmico.
+CYCLE_KEY = "cycle"
+
+# Il wrapper di ruolo gemello: quello che ci sta dentro diventa i breakpoint di
+# un envelope su tempi equispaziati, non una serie letta per indice. I due
+# wrapper dichiarano il **ruolo**; il vocabolario dei generatori (``values`` /
+# ``ramp`` / banda), condiviso, dice solo da dove vengono i numeri.
+LINEAR_ENV_KEY = "linear_env"
+
+
+def is_corredo(v: Any) -> bool:
+    """True se ``v`` e' un corredo (dict con chiave ``list``)."""
+    return isinstance(v, dict) and CORREDO_KEY in v
+
+
+def is_cyclic(v: Dict[str, Any]) -> bool:
+    """True se il corredo e' un pattern (si avvolge) invece che un accordo."""
+    return bool(v.get(CYCLE_KEY))
+
+
+def corredo_values(v: Dict[str, Any]) -> list:
+    """Gli elementi di un corredo gia' risolto."""
+    return v[CORREDO_KEY]
 
 # Nomi che un'espressione risolve senza scope (funzioni primitive e costanti):
 # non sono manopole, quindi vanno esclusi quando si cercano i riferimenti a
@@ -108,10 +147,24 @@ def names_in(text: Any) -> set:
         tree = ast.parse(text, mode="eval")
     except SyntaxError:
         return set()
-    names = {
-        node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+    # Si esclude il **bersaglio della chiamata**, non i nomi di funzione per
+    # sottrazione: e' il meccanismo di ``granstudies.inject.expr_names`` dopo
+    # granulation-studies #45, e le due strade divergono. Con la sottrazione
+    # ``len(ratio)`` dava ``{len, ratio}`` (falso «manopola non dichiarata»
+    # appena ``len`` entra in uso) e ``min(abs, 2)`` dava l'insieme vuoto,
+    # nascondendo una manopola *usata come argomento* che si chiama come una
+    # primitiva — la guardia anti-refuso l'avrebbe data per non referenziata.
+    chiamate = {
+        id(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
-    return names - FUNCTION_NAMES - CONSTANT_NAMES
+    names = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and id(node) not in chiamate
+    }
+    return names - CONSTANT_NAMES
 
 
 def parse_expr_node(
@@ -273,7 +326,17 @@ def _is_pairs(v: Any) -> bool:
 
 
 def _checked(name: str, v: Any) -> Any:
-    if _is_scalar(v) or _is_pairs(v):
+    """Il valore di scope ``name``, se ha una forma ammessa.
+
+    Ammette anche i corredi: sono binding legittimi (l'iniezione per nome li
+    mette negli scope ``let`` come ogni altra manopola). E' ``_eval`` sul nome
+    nudo a rifiutarli — un corredo si legge solo per indice.
+    """
+    if _is_scalar(v):
+        return v
+    if is_corredo(v):
+        return _checked_corredo(name, v)
+    if _is_pairs(v):
         return v
     if (
         isinstance(v, (list, tuple)) and len(v) == 2
@@ -283,9 +346,42 @@ def _checked(name: str, v: Any) -> Any:
     if isinstance(v, dict) and _is_pairs(v.get("points")):
         return v
     raise ValueError(
-        f"expr: '{name}' ha una forma non riconosciuta — in scope solo scalari "
-        "o forme statiche di Env (niente nodi-generatore)."
+        f"expr: '{name}' ha una forma non riconosciuta — in scope solo scalari, "
+        "forme statiche di Env o corredi (niente nodi-generatore)."
     )
+
+
+def _checked_corredo(name: str, v: Dict[str, Any]) -> Dict[str, Any]:
+    """Un corredo in scope, se e' gia' risolto e ben formato.
+
+    La validazione alla *dichiarazione* vive nella diagnostica, dove ci sono le
+    coordinate dello YAML; qui si controlla solo cio' che serve a non valutare
+    su una struttura rotta — un corredo puo' arrivare in scope anche scritto a
+    mano nel ``let`` di un nodo-expr.
+    """
+    elems = v[CORREDO_KEY]
+    if isinstance(elems, dict):
+        raise ValueError(
+            f"expr: il corredo '{name}' non e' stato generato — un corredo con "
+            "un generatore dentro 'list' si dichiara in un 'let:' di documento "
+            "o di gruppo, che lo risolve al load; qui arriva gia' fatto."
+        )
+    if not isinstance(elems, list) or not elems:
+        raise ValueError(
+            f"expr: il corredo '{name}' e' vuoto o malformato — 'list' vuole "
+            "una lista non vuota."
+        )
+    if not all(_is_scalar(x) for x in elems):
+        raise ValueError(
+            f"expr: il corredo '{name}' contiene elementi non scalari — "
+            "i corredi di sagome sono fuori dalla v1."
+        )
+    if CYCLE_KEY in v and not isinstance(v[CYCLE_KEY], bool):
+        raise ValueError(
+            f"expr: il corredo '{name}': '{CYCLE_KEY}' vuole true o false "
+            f"(ricevuto {v[CYCLE_KEY]!r})."
+        )
+    return v
 
 
 def _map_y(env: Any, fn) -> Any:
@@ -304,11 +400,22 @@ def _eval(node: ast.AST, scope: Mapping[str, Any]) -> Any:
         return node.value
     if isinstance(node, ast.Name):
         if node.id in scope:
-            return _checked(node.id, scope[node.id])
+            v = _checked(node.id, scope[node.id])
+            if is_corredo(v):
+                # La linea di confine della grammatica: una lista non e' mai un
+                # valore. Puo' comparire solo come ``nome[expr]`` o ``len(nome)``.
+                raise ValueError(
+                    f"expr: '{node.id}' e' un corredo — si legge solo per "
+                    f"indice ('{node.id}[0]'), non come valore: non si passa "
+                    "a una funzione, non ci si fa aritmetica."
+                )
+            return v
         if node.id in _CONSTANTS:
             return _CONSTANTS[node.id]
         names = ", ".join(sorted(set(scope) | set(_CONSTANTS))) or "nessuno"
         raise ValueError(f"expr: nome ignoto '{node.id}' (disponibili: {names}).")
+    if isinstance(node, ast.Subscript):
+        return _subscript(node, scope)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
         v = _eval(node.operand, scope)
         if isinstance(node.op, ast.UAdd):
@@ -332,8 +439,104 @@ def _eval(node: ast.AST, scope: Mapping[str, Any]) -> Any:
         return _call(node, scope)
     raise ValueError(
         f"expr: costrutto non ammesso {ast.unparse(node)!r} "
-        "(solo numeri, nomi, + - * / // % **, funzioni primitive, parentesi)."
+        "(solo numeri, nomi, + - * / // % **, l'indicizzazione di un corredo, "
+        "funzioni primitive, parentesi)."
     )
+
+
+def _subscript(node: ast.Subscript, scope: Mapping[str, Any]) -> Any:
+    """``nome[expr]``: l'elemento di un corredo.
+
+    La base e' un **nome**, non un'espressione qualunque: una lista non e' mai
+    un valore, quindi non c'e' niente altro che possa produrne una. L'indice
+    invece e' un'espressione libera, purche' valuti a un intero — un indice
+    frazionario e' errore, la quantizzazione si scrive con ``//`` o ``floor``.
+    """
+    if not isinstance(node.value, ast.Name):
+        raise ValueError(
+            f"expr: si indicizza solo un corredo per nome, non "
+            f"{ast.unparse(node.value)!r} — una lista non e' mai un valore."
+        )
+    name = node.value.id
+    if name not in scope:
+        names = ", ".join(sorted(set(scope) | set(_CONSTANTS))) or "nessuno"
+        raise ValueError(f"expr: nome ignoto '{name}' (disponibili: {names}).")
+    corredo = _checked(name, scope[name])
+    if not is_corredo(corredo):
+        raise ValueError(
+            f"expr: '{name}' non e' un corredo, non si puo' indicizzare — "
+            "l'indicizzazione legge le liste dichiarate con 'list:' in un 'let:'."
+        )
+    return _element(name, corredo, _eval(node.slice, scope))
+
+
+def _element(name: str, corredo: Dict[str, Any], idx: Any) -> Any:
+    """L'elemento di ``corredo`` all'indice ``idx``, validato."""
+    if not _is_scalar(idx):
+        raise ValueError(
+            f"expr: l'indice di '{name}' non e' un numero — un Env non indicizza."
+        )
+    if isinstance(idx, float):
+        if not idx.is_integer():
+            raise ValueError(
+                f"expr: l'indice di '{name}' non e' intero ({idx}) — fra due "
+                "elementi non c'e' niente. Quantizza con '//' o 'floor()'."
+            )
+        idx = int(idx)
+    elems = corredo_values(corredo)
+    size = len(elems)
+    if is_cyclic(corredo):
+        # Un pattern e' periodico per natura: il quinto elemento *e'* il primo.
+        # Il modulo di Python porta con se' i negativi gratis (``-1 % 4 == 3``),
+        # quindi il senso di lettura invertito resta coerente.
+        return elems[idx % size]
+    # Indici negativi: ``ratio[-1]`` e' l'ultimo. Servono a invertire il senso
+    # di lettura del corredo.
+    pos = idx + size if idx < 0 else idx
+    if not 0 <= pos < size:
+        raise ValueError(
+            f"expr: indice {idx} fuori dal corredo '{name}', che ha {size} "
+            f"elementi (indici 0..{size - 1} dall'inizio, -1..-{size} dalla "
+            f"fine) — e' un accordo, un insieme fisso. Per un pattern che si "
+            f"ripete dichiara '{CYCLE_KEY}: true' accanto a 'list'."
+        )
+    return elems[pos]
+
+
+def _len(node: ast.Call, scope: Mapping[str, Any]) -> int:
+    """``len(nome)``: la lunghezza di un corredo. Solo di un corredo.
+
+    ``len`` di un envelope dev'essere errore, non «quanti breakpoint ha»:
+    quello e' un dettaglio di rappresentazione — a parita' di intenzione
+    l'espansione puo' produrne un numero diverso — e farlo trapelare
+    renderebbe le espressioni dipendenti dall'implementazione.
+    """
+    if node.keywords:
+        raise ValueError(
+            "expr: 'len' non accetta argomenti keyword (solo posizionali)."
+        )
+    if len(node.args) != 1:
+        raise ValueError(
+            f"expr: 'len' vuole 1 argomento (ricevuti {len(node.args)})."
+        )
+    arg = node.args[0]
+    if not isinstance(arg, ast.Name):
+        raise ValueError(
+            f"expr: 'len' accetta solo un corredo per nome, non "
+            f"{ast.unparse(arg)!r}."
+        )
+    name = arg.id
+    if name not in scope:
+        names = ", ".join(sorted(set(scope) | set(_CONSTANTS))) or "nessuno"
+        raise ValueError(f"expr: nome ignoto '{name}' (disponibili: {names}).")
+    v = _checked(name, scope[name])
+    if not is_corredo(v):
+        che = "uno scalare" if _is_scalar(v) else "un envelope"
+        raise ValueError(
+            f"expr: 'len' vuole un corredo, ma '{name}' e' {che} — la "
+            "lunghezza di un envelope e' un dettaglio di rappresentazione."
+        )
+    return len(corredo_values(v))
 
 
 def _call(node: ast.Call, scope: Mapping[str, Any]) -> Any:
@@ -348,6 +551,11 @@ def _call(node: ast.Call, scope: Mapping[str, Any]) -> Any:
             f"expr: '{name}' non accetta argomenti keyword (solo posizionali)."
         )
     fn, lo, hi = _FUNCTIONS[name]
+    if name == "len":
+        # Prima della valutazione degli argomenti: ``_eval`` su un nome-corredo
+        # e' errore (una lista non e' un valore), e ``len`` e' l'unica funzione
+        # che di un corredo vive.
+        return _len(node, scope)
     args = [_eval(a, scope) for a in node.args]
     count = len(args)
     if count < lo or (hi is not None and count > hi):

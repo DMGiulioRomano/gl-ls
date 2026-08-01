@@ -1213,7 +1213,8 @@ def _check_spread(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
     if not isinstance(spread, dict):
         bag.add(spath, "'spread' e' un dict {n?, over, sweep?}.", code="spread-type")
         return
-    n_decl = _check_spread_n(bag, spath, spread.get("n"))
+    n_decl = _check_spread_n(bag, spath, spread.get("n"),
+                             _outer_knob_names(doc, spath))
     # forma annidata ``over: {...}`` + chiavi dotted ``over.<path>`` al primo
     # livello (granstudies ``_expand_spread_dotted``): stesse entry, fuse
     items = over_items(spread)
@@ -1318,12 +1319,17 @@ def _report_strategy_count(bag: Bag, spath: KeyPath, oe, markers: List[str]) -> 
                 code="spread-strategy")
 
 
-def _check_spread_n(bag: Bag, spath: KeyPath, raw_n: Any) -> Optional[int]:
+def _check_spread_n(bag: Bag, spath: KeyPath, raw_n: Any,
+                    esterne: Optional[Dict[str, Any]] = None) -> Optional[int]:
     """``spread.n`` normalizzato: intero >= 1, Env (il picco), o nodo-expr
     valutato (percorso-v1).
 
-    Nel nodo-expr il runtime non inietta ``i``/``n`` (li possiede lo spread):
-    lo scope e' il solo ``let``, e il risultato deve essere un intero >= 1."""
+    Nel nodo-expr il runtime non inietta ``i``/``n`` (li possiede lo spread) e
+    nemmeno le manopole di voce di ``spread.let``, che al momento in cui ``n``
+    si calcola non esistono ancora. Inietta invece le manopole di **documento e
+    di gruppo**: ``n: {expr: "k"}`` con ``k`` nel ``let:`` funziona, ed e' la
+    forma con cui ``n: {expr: "len(ratio)"}`` lega la popolazione a un corredo.
+    """
     if raw_n is None:
         return None
     if is_n_env(raw_n):
@@ -1331,7 +1337,7 @@ def _check_spread_n(bag: Bag, spath: KeyPath, raw_n: Any) -> Optional[int]:
     if exprlang.is_expr_node(raw_n):
         try:
             text, let = exprlang.parse_expr_node(raw_n)
-            out = exprlang.eval_expr(text, dict(let))
+            out = exprlang.eval_expr(text, {**(esterne or {}), **let})
         except ValueError as e:
             bag.add(spath + ("n",), str(e), code="expr", prefer_value=True)
             return None
@@ -1437,20 +1443,43 @@ def _is_gate_level(doc: Document, volume: Any, vkp: KeyPath) -> bool:
 _LET_BAND_KEYS = frozenset({"base", "range", "seed", "distribution", "drift"})
 
 
+def _outer_knob_names(doc: Document, spath: KeyPath) -> Dict[str, Any]:
+    """Le manopole di ``let:`` **fuori** dallo spread: documento e gruppo.
+
+    Sono quelle che il runtime inietta per nome nei nodi-expr dello spread
+    prima di valutarli, ``spread.n`` compreso. I corredi entrano tipati: li'
+    il tipo e' proprio cio' che serve, perche' ``ratio[i]`` e ``len(ratio)``
+    si valutano solo su un corredo, e legarli a uno scalare darebbe «non e' un
+    corredo» su codice giusto.
+    """
+    def _lega(blocco: Any) -> Dict[str, Any]:
+        if not isinstance(blocco, dict):
+            return {}
+        return {
+            k: (_corredo_binding(v) if exprlang.is_corredo(v) else 1.0)
+            for k, v in blocco.items()
+        }
+
+    names: Dict[str, Any] = dict(_lega(doc.get(("let",))))
+    if spath and spath[0] == "streams" and len(spath) >= 2:
+        names.update(_lega(doc.get(("streams", spath[1], "let"))))
+    return names
+
+
 def _spread_scope_names(doc: Document, spath: KeyPath, spread: Any) -> Dict[str, Any]:
     """Le manopole ``let:`` in scope per le expr di uno spread — documento,
     gruppo (se lo spread e' di uno stream) e voce (``spread.let``) — legate a
-    uno scalare neutro: servono solo a risolvere i nomi, non a tipizzare."""
-    names: Dict[str, Any] = {}
-    dl = doc.get(("let",))
-    if isinstance(dl, dict):
-        names.update({k: 1.0 for k in dl})
-    if spath and spath[0] == "streams" and len(spath) >= 2:
-        gl = doc.get(("streams", spath[1], "let"))
-        if isinstance(gl, dict):
-            names.update({k: 1.0 for k in gl})
+    uno scalare neutro: servono solo a risolvere i nomi, non a tipizzare.
+
+    L'eccezione sono i **corredi**: li' il tipo e' proprio cio' che serve, perche'
+    ``ratio[i]`` e ``len(ratio)`` si valutano solo su un corredo. Legarli a uno
+    scalare darebbe «non e' un corredo» su codice giusto.
+    """
+    names: Dict[str, Any] = dict(_outer_knob_names(doc, spath))
     vl = spread.get("let") if isinstance(spread, dict) else None
     if isinstance(vl, dict):
+        # Le manopole di voce sono scalari per definizione (un valore per
+        # voce); un corredo dichiarato qui e' errore, lo dice ``_check_corredi``.
         names.update({k: 1.0 for k in vl})
     return names
 
@@ -1882,11 +1911,63 @@ def _knob_binding(val: Any) -> Any:
     if isinstance(val, list):
         return _ENV_PLACEHOLDER            # envelope disegnato o [a, b]
     if isinstance(val, dict):
+        if exprlang.is_corredo(val):
+            return _corredo_binding(val)   # il corredo resta un corredo
         if exprlang.is_expr_node(val):
             return 1.0                     # nodo-expr derivato: scalare, ai fini del check
+        if exprlang.LINEAR_ENV_KEY in val:
+            return _ENV_PLACEHOLDER        # il wrapper di ruolo produce un Env
         if any(mk in val for mk in _ENV_FORM_MARKERS):
             return _ENV_PLACEHOLDER        # banda/ramp/values -> Env
     return 1.0
+
+
+def _corredo_binding(val: Dict[str, Any]) -> Any:
+    """Il corredo con cui una manopola ``{list: ...}`` entra in una expr.
+
+    Il runtime lo risolve al load; qui va ricostruito, e cio' che conta e' la
+    **lunghezza esatta** — la usano ``len()``, il controllo di fuori range e il
+    rilievo del corredo sotto-consumato. I valori contano meno: servono solo a
+    non far fallire una expr che li usa, e per il corredo pescato non sono
+    calcolabili senza il seed del runtime, quindi li' si ripiega su un
+    rappresentante (la stessa scelta che ``_ENV_PLACEHOLDER`` fa per le bande).
+
+    Un corredo malformato torna com'e': a dirlo e' ``_check_corredi``, con la
+    posizione nello YAML, non questa funzione.
+    """
+    dentro = val.get(exprlang.CORREDO_KEY)
+    fuori = {k: v for k, v in val.items() if k == exprlang.CYCLE_KEY}
+    if isinstance(dentro, list):
+        return val
+    if not isinstance(dentro, dict):
+        return val
+    if isinstance(dentro.get("values"), list):
+        return {exprlang.CORREDO_KEY: list(dentro["values"]), **fuori}
+    if isinstance(dentro.get("ramp"), dict):
+        quanti = ramp_count(dentro["ramp"])
+        if quanti:
+            return {exprlang.CORREDO_KEY: _serie(dentro["ramp"], quanti), **fuori}
+        return val
+    n = dentro.get("n")
+    if isinstance(n, int) and not isinstance(n, bool) and n >= 1:
+        base = dentro.get("base")
+        rappresentante = float(base) if _is_number(base) else 1.0
+        return {exprlang.CORREDO_KEY: [rappresentante] * n, **fuori}
+    return val
+
+
+def _serie(ramp: Dict[str, Any], quanti: int) -> List[float]:
+    """I valori di un ramp pieno, per dare al corredo generato i suoi numeri."""
+    start, step = ramp.get("start"), ramp.get("step")
+    if not (_is_number(start) and _is_number(step)):
+        return [1.0] * quanti
+    stop = ramp.get("stop")
+    verso = -1 if _is_number(stop) and stop < start else 1
+    return [float(start) + verso * abs(float(step)) * k for k in range(quanti)]
+
+
+def _is_number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _iter_expr_texts(data: Any):

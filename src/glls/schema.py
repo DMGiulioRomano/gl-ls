@@ -35,7 +35,41 @@ def _k(name: str, doc: str, **kw) -> Key:
 
 _GEN_DOC = {
     "values": "**Generatore Y — lista esplicita.** I valori cosi' come sono "
-              "(rimpiazza, non concatena). Possiede `n` (= len).",
+              "(rimpiazza, non concatena). Possiede `n` (= len).\n\n"
+              "Marca la **Famiglia 1**: la lista si legge **per indice**, la "
+              "posizione k e' l'elemento k. Se invece i valori devono "
+              "diventare i breakpoint di un envelope su tempi equispaziati, "
+              "il ruolo si dichiara con `linear_env:`.",
+    "linear_env": "**Wrapper di ruolo — forma nel tempo (Famiglia 2).** I "
+                  "valori diventano i **breakpoint** di un envelope su tempi "
+                  "equispaziati, e il valore in mezzo esce "
+                  "dall'interpolazione.\n\n"
+                  "Dentro ci sta l'intero vocabolario dei generatori — lista "
+                  "letterale, `values`, `ramp`, banda — che dice solo *da "
+                  "dove vengono i numeri*; il wrapper dice *come si leggono*. "
+                  "`type`/`curve` stanno **accanto** al wrapper, non dentro: "
+                  "descrivono l'envelope prodotto, non il generatore.\n\n"
+                  "Serve nei tre contesti in cui la posizione non basta a "
+                  "disambiguare: un bordo di `Env`, un `let:` di documento o "
+                  "di gruppo, un bundle di `versions:` Forma 2. Es. "
+                  "`{linear_env: [0, 1, 0], type: step}`.",
+    "list": "**Il corredo — una lista letta per indice.** Una lista "
+            "**nominata**, dichiarata in un `let:` di documento o di gruppo e "
+            "letta solo per indice da un'espressione: `ratio[0]` la "
+            "fondamentale, `ratio[i]` il valore di questa voce.\n\n"
+            "Dentro ci sta il vocabolario dei generatori, ma **un corredo "
+            "possiede la propria lunghezza**: passano la lista letterale, "
+            "`values`, il `ramp` pieno `{start, stop, step}` e la banda con "
+            "`n` esplicito; non il `ramp` parziale ne' la banda senza `n`.\n\n"
+            "Una lista non e' mai un valore: puo' comparire solo come "
+            "`nome[expr]` o `len(nome)`.",
+    "cycle": "**La politica del corredo: accordo o pattern.** Assente o "
+             "`false` = **accordo**, un insieme fisso: un indice fuori range "
+             "e' errore. `true` = **pattern**, periodico per natura: l'indice "
+             "si avvolge (`i % len`), e il quinto elemento di quattro *e'* il "
+             "primo.\n\n"
+             "Non e' un flag di comodo, sono due oggetti compositivi diversi. "
+             "Vale solo accanto a `list:`.",
     "ramp": "**Generatore Y — rampa aritmetica** `{start, stop, step}`. "
             "`step > 0` (la direzione si deduce da start/stop); `step` e' un "
             "Env: con step mobile la rampa accelera o ritarda.",
@@ -89,6 +123,14 @@ _ENV_KEYS = [
        snippet="drift:\n  step: ${1:0.1}"),
     _k("expr", _GEN_DOC["expr"], kind="macro", snippet='expr: "${1:env * 50}"'),
     _k("let", _GEN_DOC["let"], kind="macro"),
+    # I due wrapper di ruolo. Il vocabolario sopra dice **da dove vengono i
+    # numeri**; questi dicono **come si leggono**: `linear_env:` per tempo,
+    # `list:` per indice. `cycle` e' la politica del corredo e vive con `list`.
+    _k("linear_env", _GEN_DOC["linear_env"], kind="macro",
+       snippet="linear_env: [${1:0}, ${2:1}, ${3:0}]"),
+    _k("list", _GEN_DOC["list"], kind="macro",
+       snippet="list: [${1:2}, ${2:3}, ${3:4}, ${4:7}]"),
+    _k("cycle", _GEN_DOC["cycle"], values=["true", "false"], kind="macro"),
 ]
 
 # Manopole ``let:`` a tre livelli (documento / gruppo / voce). Il blocco lega
