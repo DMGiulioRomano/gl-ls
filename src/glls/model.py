@@ -64,6 +64,10 @@ class StreamInfo:
     # se la entry non ne dichiara nessuna: erediterebbe quella di documento.
     duration: Optional[float] = None
     declares_duration: bool = False       # dichiarata, anche se non statica
+    # Dove la entry la scrive, relativo alla entry stessa: ``("duration",)``,
+    # ``("base", "duration")`` o la forma puntata ``("base.duration",)``. Serve
+    # ad ancorare le code action alla riga giusta.
+    duration_path: Optional[KeyPath] = None
     # La entry porta un blocco ``stack:`` proprio (annidato o in chiavi
     # puntate). Dopo il merge quel blocco e' top-level del documento dello
     # stream, quindi il processo stack e' attivo per LUI anche se il documento
@@ -144,16 +148,30 @@ class StudyModel:
     def duration_for(self, stream: Optional[str] = None) -> Optional[float]:
         """Durata risolta di uno stream (o del documento se ``stream`` e' None).
 
-        None solo quando nessuna fonte statica la risolve: e' l'unico caso in
-        cui il runtime va davvero in errore su ``stack:``."""
+        None quando nessuna fonte *statica* la risolve — il caso in cui il
+        runtime va in errore su ``stack:`` — ma anche quando una fonte c'e' e
+        non da' un numero (generatore, nodo-expr): li' un default piu' in basso
+        nella catena sarebbe un numero che il runtime non usa mai, e tacere e'
+        piu' onesto che rispondere male.
+
+        Precedenza: ``duration:`` di entry > durata di replica di
+        ``versions:``/``percorso:`` > ``base.duration`` di documento. La replica
+        sta **sopra** il default di documento perche' i due rami non la
+        affiancano, la **sovrascrivono**: ``data_k["base"] = {**base,
+        "duration": durations[k]}`` (``versions:628``, ``percorso:720``). In un
+        documento con entrambe, il ``base.duration`` scritto a mano non arriva
+        mai a valle.
+        """
         if stream is not None:
             si = self.streams.get(stream)
             if si is not None and si.duration is not None:
                 return si.duration
+            if si is not None and si.declares_duration:
+                return None      # dichiarata ma non statica: non e' un numero
+        if self.replica_duration_source is not None:
+            return self.replica_duration
         if self.base_duration is not None:
             return self.base_duration
-        if self.replica_duration is not None:
-            return self.replica_duration
         # ultima rete: il top-level ora vietato. Leggerlo qui evita che ogni
         # stima (walk, lens, inlay) muoia su un documento non ancora migrato,
         # che ha gia' la sua diagnostica.
@@ -708,17 +726,21 @@ def build(doc: Document) -> StudyModel:
             # ``base.duration:`` puntata al primo livello della entry e la
             # forma annidata sono la stessa cosa (``_expand_dotted_keys``).
             entry_base = cfg.get("base") if isinstance(cfg.get("base"), dict) else {}
-            sources = [(cfg, "duration"), (entry_base, "duration"),
-                       (cfg, "base.duration")]
-            declared = any(key in node for node, key in sources)
-            dur = next((_num(node[key]) for node, key in sources
-                        if key in node and _num(node[key]) is not None), None)
+            sources = [(cfg, "duration", ("duration",)),
+                       (entry_base, "duration", ("base", "duration")),
+                       (cfg, "base.duration", ("base.duration",))]
+            declared = any(key in node for node, key, _kp in sources)
+            dur, dur_path = None, None
+            for node, key, kp in sources:
+                if key in node and _num(node[key]) is not None:
+                    dur, dur_path = _num(node[key]), kp
+                    break
             declares_stack = "stack" in cfg or any(
                 isinstance(k, str) and k.startswith("stack.") for k in cfg)
             m.streams[name] = StreamInfo(
                 name=name, cfg=cfg, doc_path=("streams", name),
                 is_spread=is_spread, spread_n=n,
-                duration=dur, declares_duration=declared,
+                duration=dur, declares_duration=declared, duration_path=dur_path,
                 declares_stack=declares_stack, stack_paths=stack_paths_of(cfg),
                 stack_nulled=stack_nulled_of(cfg),
             )
