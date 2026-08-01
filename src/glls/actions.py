@@ -3,11 +3,12 @@
 - **Conversione unita' della camminata-X** (`stack.<asse>`): hz <-> s <-> bpm
   con ricalcolo di ``base``/``range`` nello spazio di destinazione (il
   passaggio rate<->periodo inverte i bordi della banda).
-- **Riscala al cambio di duration**: quando ``duration:`` (o ``base.duration``)
-  cambia, i breakpoint a tempi assoluti negli envelope di ``base.*`` vengono
-  riscalati del fattore nuovo/vecchio (i normalized si riscalano da soli).
+- **Riscala al cambio di duration**: quando ``base.duration`` cambia, i
+  breakpoint a tempi assoluti negli envelope di ``base.*`` vengono riscalati
+  del fattore nuovo/vecchio (i normalized si riscalano da soli).
 - **Conversione time_mode** absolute <-> normalized con ricalcolo dei tempi.
-- **Quick fix** dalle diagnostiche (rename, rimozioni, migrazione rand:/cps:).
+- **Quick fix** dalle diagnostiche (rename, rimozioni, migrazione rand:/cps:,
+  migrazione della ``duration:`` top-level dove ora vive).
 """
 from __future__ import annotations
 
@@ -258,7 +259,7 @@ def time_mode_actions(doc: Document, m: StudyModel, uri: str,
     base_entry = doc.entry(("base",))
     if base_entry is None:
         return out
-    dur = m.base_duration or m.duration
+    dur = m.duration_for()
     if not dur or dur <= 0:
         return out
     tm_entry = doc.entry(("base", "time_mode"))
@@ -349,12 +350,92 @@ def quickfixes(doc: Document, uri: str,
                                        "Aggiungi 'baseline'", diag)
             if action:
                 out.append(action)
-        elif kind == "add-duration":
-            first = doc.entry(("study_id",))
-            line = (first.value_span.end_line + 1) if first else 0
-            out.append(_action("Aggiungi 'duration:' top-level", uri,
-                               [_insert(line, 0, "duration: 30\n")],
-                               types.CodeActionKind.QuickFix, [diag]))
+        elif kind == "add-base-duration":
+            out.extend(_add_base_duration_actions(doc, uri, diag))
+        elif kind == "move-duration":
+            out.extend(_move_duration_actions(doc, uri, diag,
+                                              bool(fix.get("to_versions"))))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Quick fix della durata (granstudies #42): ogni ``duration`` sta accanto alla
+# cosa di cui e' la durata, e il top-level non e' piu' una di quelle cose.
+
+
+def _duration_text(doc: Document) -> str:
+    """Il valore da scrivere: quello del top-level se c'e', altrimenti 30."""
+    top = doc.get(("duration",))
+    return fmt_num(top) if isinstance(top, (int, float)) and not isinstance(top, bool) else "30"
+
+
+def _add_base_duration_actions(doc: Document, uri: str,
+                               diag: types.Diagnostic) -> List[types.CodeAction]:
+    """``duration:`` dentro ``base:`` — il default di durata per ogni stream.
+
+    Con ``base:`` presente la chiave entra come sua prima figlia; senza, si
+    crea il blocco (uno studio senza ``base:`` e' possibile, tutto default)."""
+    text = _duration_text(doc)
+    action = _insert_first_key(doc, uri, ("base",), f"duration: {text}",
+                              "Aggiungi 'duration' a 'base:'", diag)
+    if action is not None:
+        return [action]
+    if doc.entry(("base",)) is not None:
+        # ``base:`` presente ma vuota: la figlia va scritta rientrata sotto
+        entry = doc.entry(("base",))
+        ks = entry.key_span or entry.value_span
+        return [_action("Aggiungi 'duration' a 'base:'", uri,
+                        [_insert(ks.end_line + 1, 0,
+                                 " " * (ks.start_col + 2) + f"duration: {text}\n")],
+                        types.CodeActionKind.QuickFix, [diag])]
+    anchor = doc.entry(("study_id",))
+    line = (anchor.value_span.end_line + 1) if anchor else 0
+    return [_action("Aggiungi 'base:' con 'duration'", uri,
+                    [_insert(line, 0, f"base:\n  duration: {text}\n")],
+                    types.CodeActionKind.QuickFix, [diag])]
+
+
+def _move_duration_actions(doc: Document, uri: str, diag: types.Diagnostic,
+                           to_versions: bool) -> List[types.CodeAction]:
+    """Sposta la ``duration:`` top-level dove ora vive.
+
+    Due destinazioni possibili, e sono cose diverse: ``base.duration`` e' la
+    durata di uno stream (default di documento), ``versions.duration`` e' il
+    passo della concatenazione. Con ``versions:`` senza passo proprio si
+    offrono entrambe — indovinare quale intendeva l'utente non e' compito di un
+    quick fix."""
+    entry = doc.entry(("duration",))
+    if entry is None:
+        return []
+    start_line = (entry.key_span or entry.value_span).start_line
+    end_line, end_col = _block_end(entry)
+    cut = types.TextEdit(
+        range=types.Range(start=_pos(start_line, 0), end=_pos(end_line, end_col)),
+        new_text="")
+    text = _duration_text(doc)
+    out: List[types.CodeAction] = []
+    for dest, title in (("base", "Spostala in 'base.duration' (durata di stream)"),
+                        ("versions",
+                         "Spostala in 'versions.duration' (passo delle versioni)")):
+        if dest == "versions" and not to_versions:
+            continue
+        target = doc.entry((dest,))
+        if target is None:
+            continue
+        value = doc.get((dest,))
+        if isinstance(value, dict) and value:
+            first = doc.entry((dest, next(iter(value))))
+            if first is None or first.key_span is None:
+                continue
+            col = first.key_span.start_col
+            line = first.key_span.start_line
+        else:
+            ks = target.key_span or target.value_span
+            col, line = ks.start_col + 2, ks.end_line + 1
+        out.append(_action(
+            title, uri,
+            [cut, _insert(line, 0, " " * col + f"duration: {text}\n")],
+            types.CodeActionKind.QuickFix, [diag]))
     return out
 
 

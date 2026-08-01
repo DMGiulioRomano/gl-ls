@@ -36,10 +36,27 @@ Tre strati, tutti puri e testabili senza LSP:
 - **Ricalcoli come code action con TextEdit**, non come comandi custom: cosi'
   funzionano in ogni client senza supporto speciale (`workspace/applyEdit`
   non serve, l'edit viaggia nella risposta).
-- **Memoria delle duration**: al parse il server confronta `duration` e
-  `base.duration` con l'ultimo valore visto; una differenza arma la code
-  action "riscala vecchio -> nuovo" finche' non si torna al valore di
-  partenza. Nessun protocollo extra, funziona con qualsiasi client.
+- **Memoria delle duration**: al parse il server confronta `base.duration`
+  (e la `duration:` top-level, ormai vietata ma ancora scrivibile per errore)
+  con l'ultimo valore visto; una differenza arma la code action "riscala
+  vecchio -> nuovo" finche' non si torna al valore di partenza. Nessun
+  protocollo extra, funziona con qualsiasi client.
+- **Lo stato del processo si legge per stream, non per documento**: il runtime
+  valida il documento *merged* di ogni entry di `streams:`, dove il blocco
+  `stack:` (o `duration:`) dell'override e' diventato top-level. Le domande
+  "c'e' lo stack?" e "questo asse ha una camminata?" hanno quindi una risposta
+  per stream — `StreamInfo.declares_stack`/`stack_paths`/`stack_nulled` e
+  `StudyModel.walk_in_stream` — e le tre risposte possibili (dichiarata,
+  ereditata, annullata con `asse: null`) sono tutte e tre diverse. Leggerle sul
+  documento base costava un falso positivo e due falsi negativi.
+- **La durata e' per-stream** (granstudies #42): non esiste una durata di
+  documento dichiarata — quella e' dedotta, `max(onset + duration)`. Il
+  modello espone una catena (`StudyModel.duration_for(stream)`: `duration:` di
+  entry > `base.duration` > durata di replica di `versions:`/`percorso:`)
+  invece di un campo, e ogni stima che dipende da una durata (anti-runaway
+  della camminata, code lens dei breakpoint, inlay dei tempi normalizzati)
+  passa da li'. Un campo unico li aveva fatti morire in silenzio quando il
+  top-level e' stato vietato.
 - **Conversione unit**: preserva la *banda* punto per punto (bordi invertiti
   nel passaggio rate<->periodo, unione dei tempi per envelope disallineati) e
   rifiuta esplicitamente le forme non statiche (nodi generatore, expr,
@@ -56,7 +73,15 @@ Tre strati, tutti puri e testabili senza LSP:
   (`points`, con `time_mode` locale rispettato) e l'`end_time` dei compatti;
   non i `values` di spread (semantica ambigua).
 - I bounds dinamici dell'engine (`loop_* <= sample_dur`) non sono verificati
-  (servirebbe leggere il file audio).
+  (servirebbe leggere il file audio). Da PGE v5.1.0 `pge.api.parameter_bounds()`
+  li espone gia' risolti: chiuderebbe il drift della tabella di `engine_info`,
+  al prezzo della scelta standalone.
+- La superficie posizionale degli envelope engine (forma compatta a cicli, BP
+  group `[points, interp]`) si valida per *forma*, non per grammatica: i
+  predicati sono quelli ufficiali della disambiguazione — cornice a 3-6
+  elementi con `end_time` numero e `n_reps` intero per la compatta, 2 elementi
+  con lista di punti e stringa per il gruppo — e una forma che non ricade in
+  nessuno dei due passa senza diagnostica invece di essere indovinata.
 
 ## Estendere
 

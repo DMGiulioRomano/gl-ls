@@ -27,7 +27,14 @@ _KIND = {
     "macro": types.CompletionItemKind.Function,
     "string": types.CompletionItemKind.File,
     "internal": types.CompletionItemKind.Text,
+    "deprecated": types.CompletionItemKind.Text,
 }
+
+# Kind che lo schema conosce ma il completamento non propone: ``internal`` e'
+# scritto dal resolver, ``deprecated`` e' una chiave *vietata* tenuta nello
+# schema solo per poterla diagnosticare con precisione (e spiegare all'hover
+# dove e' finita) invece di liquidarla come sconosciuta.
+_NOT_PROPOSED = frozenset({"internal", "deprecated"})
 
 
 def infer_context(text: str, line: int, character: int) -> Tuple[Tuple[str, ...], str, Optional[str], str]:
@@ -150,7 +157,7 @@ def _complete_key(doc: yamlpos.Document, m: StudyModel,
     present = _existing_keys(doc.text, line, path)
 
     for k in schema.keys_for(ctx):
-        if k.name in present or k.kind == "internal":
+        if k.name in present or k.kind in _NOT_PROPOSED:
             continue
         snippet = k.snippet
         insert = snippet if snippet else (k.name + ": ")
@@ -300,7 +307,32 @@ def _complete_value(doc: yamlpos.Document, m: StudyModel, path: Tuple[str, ...],
         samples_dir = doc.get(("samples_dir",), "samples") or "samples"
         for f in _samples(file_dir, str(samples_dir)):
             items.append(_item(f, "", types.CompletionItemKind.File, sort="1"))
+    # forme di envelope posizionali dell'engine: si scrivono a memoria male, e
+    # il BP group in particolare non ha una chiave su cui appendere l'enum di
+    # ``interp`` — lo snippet e' il posto dove offrirlo
+    if _engine_env_path(path, key) is not None:
+        items.append(_item(
+            "zona_interp",
+            "Snippet: **BP group** `[points, interp]` — macrozona con "
+            "interpolazione propria e tempi assoluti.\n\n" + schema.BP_GROUP_DOC,
+            types.CompletionItemKind.Class,
+            snippet="[[[${1:0}, ${2:0}], [${3:1}, ${4:30}]], "
+                    "'${5|linear,cubic,step|}']",
+            sort="3",
+        ))
     return items
+
+
+def _engine_env_path(path: Tuple[str, ...], key: str) -> Optional[str]:
+    """Path engine dotted se ``key`` sotto ``path`` e' un parametro che accetta
+    un envelope (dentro ``base:`` o ``streams.*.base:``)."""
+    parts = list(path)
+    while parts and parts[0] == "streams":
+        parts = parts[2:]
+    if not parts or parts[0] != "base":
+        return None
+    dotted = ".".join([*(str(p) for p in parts[1:]), key])
+    return dotted if dotted in EI.PARAMS else None
 
 
 def _b(v: Optional[float]) -> str:

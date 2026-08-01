@@ -29,7 +29,6 @@ def _apply(text, edits):
 
 
 DUR_TEXT = """study_id: t
-duration: 40
 base:
   duration: 6
   sample: corpus.wav
@@ -52,7 +51,7 @@ def test_duration_rescale_respects_stream_time_mode():
     doc = yamlpos.parse(DUR_TEXT)
     m = model.build(doc)
     acts = actions.duration_actions(doc, m, "file:///t.yml", _full_range(),
-                                    {"duration": (20.0, 40.0)})
+                                    {"base.duration": (20.0, 40.0)})
     assert len(acts) == 1
     new_text = _apply(DUR_TEXT, acts[0].edit.changes["file:///t.yml"])
     # gli envelope absolute di base: riscalati (x2)
@@ -72,7 +71,7 @@ def test_duration_rescale_includes_stream_absolute_override():
     doc = yamlpos.parse(text)
     m = model.build(doc)
     acts = actions.duration_actions(doc, m, "file:///t.yml", _full_range(),
-                                    {"duration": (20.0, 40.0)})
+                                    {"base.duration": (20.0, 40.0)})
     assert len(acts) == 1
     new_text = _apply(text, acts[0].edit.changes["file:///t.yml"])
     # base: normalized, intatto

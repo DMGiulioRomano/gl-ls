@@ -14,8 +14,8 @@ from typing import List, Optional, Tuple
 
 from . import engine_info as EI
 from . import schema
-from .model import (AXES_RESERVED, STACK_RESERVED, StudyModel, is_compact_env,
-                    split_over_key, split_spread_over_key)
+from .model import (AXES_RESERVED, STACK_RESERVED, StudyModel, is_bp_group,
+                    is_compact_env, split_over_key, split_spread_over_key)
 from .yamlpos import Document
 
 TOKEN_TYPES = [
@@ -97,6 +97,18 @@ def _compact_slot(doc: Document, path) -> Optional[int]:
     return _T["number"] if path[-1] in (1, 2) else _T["enumMember"]
 
 
+def _bp_group_slot(doc: Document, path) -> Optional[int]:
+    """Token dell'``interp`` di un BP group ``[points, interp]`` (PGE #64).
+
+    Pesca da un insieme chiuso come i posizionali della forma compatta, quindi
+    prende ``enumMember``; il run di punti in posizione 0 resta com'e'."""
+    if not path or not isinstance(path[-1], int) or path[-1] != 1:
+        return None
+    if not is_bp_group(doc.get(path[:-1])):
+        return None
+    return _T["enumMember"]
+
+
 def tokens(doc: Document, m: StudyModel) -> List[int]:
     raw: List[Tuple[int, int, int, int]] = []  # line, col, length, type
     lines = doc.text.splitlines()
@@ -147,7 +159,7 @@ def tokens(doc: Document, m: StudyModel) -> List[int]:
             parent_key = path[-1] if isinstance(path[-1], str) else (
                 path[-2] if len(path) >= 2 and isinstance(path[-2], str) else None
             )
-            slot = _compact_slot(doc, path)
+            slot = _compact_slot(doc, path) or _bp_group_slot(doc, path)
             if parent_key == "expr":
                 raw.extend(_expr_tokens(lines, vs.start_line, vs.start_col,
                                         vs.end_col))

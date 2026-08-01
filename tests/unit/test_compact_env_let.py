@@ -16,7 +16,6 @@ from glls import (actions, completion, diagnostics, hover, inlay, model,
                   semtokens, yamlpos)
 
 BASE = """study_id: t
-duration: 20
 base:
   onset: 0
   duration: 6

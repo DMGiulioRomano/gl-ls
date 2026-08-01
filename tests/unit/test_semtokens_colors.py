@@ -2,7 +2,6 @@
 from glls import model, semtokens, yamlpos
 
 TEXT = """study_id: t
-duration: 20
 base:
   onset: 0
   duration: 6

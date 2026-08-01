@@ -59,16 +59,47 @@ class StreamInfo:
     doc_path: KeyPath
     is_spread: bool = False
     spread_n: Optional[int] = None
+    # Durata dichiarata dalla entry: ``duration:`` di entry (che dopo il merge
+    # diventa top-level del documento merged) o la sua ``base.duration``. None
+    # se la entry non ne dichiara nessuna: erediterebbe quella di documento.
+    duration: Optional[float] = None
+    declares_duration: bool = False       # dichiarata, anche se non statica
+    # La entry porta un blocco ``stack:`` proprio (annidato o in chiavi
+    # puntate). Dopo il merge quel blocco e' top-level del documento dello
+    # stream, quindi il processo stack e' attivo per LUI anche se il documento
+    # base non ha nessun ``stack:``.
+    declares_stack: bool = False
+    # I path — relativi a ``stack.`` — che la entry scrive, con ogni prefisso
+    # (``grain.duration.range`` porta anche ``grain``, ``grain.duration``):
+    # cosi' il confine dei nomi d'asse dotted non va risolto. Una camminata
+    # annullata (``asse: null``) non c'e': la forma serve proprio a riportare
+    # l'asse a linear.
+    stack_paths: frozenset = frozenset()
+    # Gli assi che la entry riporta a linear con ``asse: null``. Non e'
+    # l'inverso di ``stack_paths``: "assente" e "annullata" sono cose diverse —
+    # assente eredita la camminata di documento, annullata la toglie.
+    stack_nulled: frozenset = frozenset()
 
 
 @dataclass
 class StudyModel:
     doc: Document
     study_id: Optional[str] = None
+    # ``duration:`` al top del documento: NON e' piu' una chiave dello studio
+    # (granstudies #42, ``study_spec.reject_top_level_duration``). Resta nel
+    # modello solo per poterla diagnosticare — non e' una fonte di durata.
     duration: Optional[float] = None
+    has_top_duration: bool = False
     base: Dict[str, Any] = field(default_factory=dict)
     time_mode: str = "absolute"
     base_duration: Optional[float] = None
+    has_base_duration: bool = False       # dichiarata, anche se non statica
+    # Durata di replica iniettata come ``base.duration`` dai rami
+    # multi-documento: ``versions.duration`` (passo della concatenazione) o
+    # ``percorso`` (durata d'istanza, dedotta da arco/passo quando implicita).
+    # Il valore c'e' solo se statico; l'etichetta dice da dove viene.
+    replica_duration_source: Optional[str] = None
+    replica_duration: Optional[float] = None
     axes: Dict[str, AxisInfo] = field(default_factory=dict)
     axes_seed: Optional[int] = None
     study_interpolation: str = "linear"
@@ -84,6 +115,62 @@ class StudyModel:
 
     def walk_for(self, axis: str) -> Optional[WalkInfo]:
         return self.walks.get(axis)
+
+    def walk_in_stream(self, axis: str, stream: str) -> bool:
+        """True se ``axis`` ha una camminata-X nel documento *merged* di
+        ``stream`` — quello che il runtime valida davvero.
+
+        Il blocco ``stack:`` di un override e' un fatto dello stream: dopo il
+        merge diventa top-level del suo documento. Tre esiti, e sono tutti e
+        tre diversi: la entry dichiara la camminata (vale), non ne parla
+        (eredita quella di documento), la annulla con ``asse: null`` (la
+        toglie, l'asse torna linear per lui). ``walk_for`` risponde per il
+        documento base, questa per uno stream."""
+        si = self.streams.get(stream)
+        if si is None:
+            return self.walk_for(axis) is not None
+        if any(p == axis or p.startswith(f"{axis}.") for p in si.stack_paths):
+            return True
+        return self.walk_for(axis) is not None and axis not in si.stack_nulled
+
+    # ---- durata (granstudies #42) -------------------------------------
+    # Ogni ``duration`` sta accanto alla cosa di cui e' la durata, e quella di
+    # uno *stream* si risolve per catena: ``duration:`` di entry >
+    # ``base.duration`` dello stream > ``base.duration`` di documento. Con
+    # ``versions:``/``percorso:`` la durata di replica viene iniettata come
+    # ``base.duration`` del documento per-combo, quindi fa da default. La
+    # durata del *documento* non si dichiara: e' ``max(onset + duration)``.
+
+    def duration_for(self, stream: Optional[str] = None) -> Optional[float]:
+        """Durata risolta di uno stream (o del documento se ``stream`` e' None).
+
+        None solo quando nessuna fonte statica la risolve: e' l'unico caso in
+        cui il runtime va davvero in errore su ``stack:``."""
+        if stream is not None:
+            si = self.streams.get(stream)
+            if si is not None and si.duration is not None:
+                return si.duration
+        if self.base_duration is not None:
+            return self.base_duration
+        if self.replica_duration is not None:
+            return self.replica_duration
+        # ultima rete: il top-level ora vietato. Leggerlo qui evita che ogni
+        # stima (walk, lens, inlay) muoia su un documento non ancora migrato,
+        # che ha gia' la sua diagnostica.
+        return self.duration
+
+    def declares_duration(self, stream: Optional[str] = None) -> bool:
+        """True se una fonte *dichiara* una durata, anche non statica.
+
+        Serve alle diagnostiche: una durata scritta come generatore o nodo-expr
+        non da' un numero ma non e' un documento senza durata."""
+        if stream is not None:
+            si = self.streams.get(stream)
+            if si is not None and si.declares_duration:
+                return True
+        return (self.has_base_duration
+                or self.replica_duration_source is not None
+                or self.has_top_duration)
 
     def sweep_counts(self) -> Optional[Dict[int, int]]:
         """{ordine: numero varianti} per gli orders dichiarati (se calcolabile)."""
@@ -232,6 +319,27 @@ def expand_over_items(
     return out
 
 
+def has_compact_frame(spec: Any) -> bool:
+    """La *cornice* posizionale di una forma compatta, senza guardare il pattern.
+
+    ``3-6 elementi`` con ``end_time`` numero in posizione 1 e ``n_reps`` intero
+    in posizione 2. Separarla dal predicato completo serve a un caso solo, ma
+    ambiguo: un pattern scritto come BP group. ``[group, end_time, n_reps]`` non
+    e' preso ne' da ``is_compact_env`` (il pattern non e' una lista di liste)
+    ne' da ``is_bp_group`` (3 elementi), e senza la cornice non si
+    distinguerebbe da un envelope misto di tre macrozone — dove il secondo
+    elemento e' una lista, non un numero.
+    """
+    return (
+        isinstance(spec, (list, tuple))
+        and 3 <= len(spec) <= 6
+        and isinstance(spec[1], (int, float))
+        and not isinstance(spec[1], bool)
+        and isinstance(spec[2], int)
+        and not isinstance(spec[2], bool)
+    )
+
+
 def is_compact_env(spec: Any) -> bool:
     """True se ``spec`` e' la forma compatta a cicli dell'engine.
 
@@ -242,16 +350,122 @@ def is_compact_env(spec: Any) -> bool:
     posizione 1, lo shorthand ``[a, b]`` ha due soli scalari.
     """
     return (
-        isinstance(spec, (list, tuple))
-        and 3 <= len(spec) <= 6
+        has_compact_frame(spec)
         and isinstance(spec[0], (list, tuple))
         and len(spec[0]) > 0
         and all(isinstance(p, (list, tuple)) for p in spec[0])
-        and isinstance(spec[1], (int, float))
-        and not isinstance(spec[1], bool)
-        and isinstance(spec[2], int)
-        and not isinstance(spec[2], bool)
     )
+
+
+def is_bp_group(spec: Any) -> bool:
+    """True se ``spec`` e' un **BP group** dell'engine: ``[points, interp]``.
+
+    Un run di breakpoint avvolto in un gruppo compatto che dichiara
+    l'interpolazione della propria macrozona (PGE #64, ``yaml.md`` §2.7),
+    simmetrico ai loop block. La disambiguazione e' quella ufficiale: il BP
+    group e' l'unica lista a **2 elementi** con ``elem[0]`` lista di punti ed
+    ``elem[1]`` stringa. Un breakpoint nudo ``[t, v]`` ha ``elem[0]``
+    numerico; un loop block ha 3-6 elementi (quindi nessuna collisione con
+    ``is_compact_env``).
+
+    Differenza che conta per la validazione: i tempi dei punti del gruppo sono
+    **assoluti**, non percentuali del ciclo come nel ``pattern`` della forma
+    compatta, ne' normalizzati in [0, 1] come i breakpoint di banda.
+    """
+    return (
+        isinstance(spec, (list, tuple))
+        and len(spec) == 2
+        and isinstance(spec[0], (list, tuple))
+        and len(spec[0]) > 0
+        and all(isinstance(p, (list, tuple)) for p in spec[0])
+        and isinstance(spec[1], str)
+    )
+
+
+def stack_paths_of(cfg: Dict[str, Any]) -> frozenset:
+    """I path scritti sotto ``stack.`` da una entry di ``streams:``.
+
+    Forma annidata (``stack: {density: {...}}``) e chiavi puntate
+    (``stack.density.base``) sono la stessa cosa dopo ``_expand_dotted_keys``
+    del runtime. Si raccoglie **ogni prefisso** — come ``_axis_write_paths`` fa
+    per ``axes.`` — cosi' un asse dotted (``grain.duration``) si riconosce per
+    confronto diretto senza dover risolvere dove finisce il suo nome.
+
+    Una entry annullata (``asse: null``) viene scartata: e' la forma con cui un
+    override riporta a linear una camminata ereditata, quindi *toglie* la
+    camminata invece di dichiararla.
+    """
+    out: set = set()
+
+    def walk(prefix: str, node: Any) -> None:
+        if prefix:
+            out.add(prefix)
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if isinstance(k, str) and v is not None:
+                    walk(f"{prefix}.{k}" if prefix else k, v)
+
+    for key, value in cfg.items():
+        if (isinstance(key, str) and key.startswith("stack.")
+                and len(key) > len("stack.") and value is not None):
+            walk(key[len("stack."):], value)
+    nested = cfg.get("stack")
+    if isinstance(nested, dict):
+        walk("", nested)
+    return frozenset(out)
+
+
+def stack_nulled_of(cfg: Dict[str, Any]) -> frozenset:
+    """Gli assi che una entry riporta a linear con ``asse: null``.
+
+    Il runtime scarta le entry annullate (``study_spec._stack_config``): dopo
+    il merge quell'asse non ha piu' camminata, quindi per QUELLO stream la
+    n-ownership torna alla Y. Va tenuto distinto dall'asse semplicemente
+    assente dall'override, che invece eredita la camminata di documento."""
+    out: set = set()
+    nested = cfg.get("stack")
+    if isinstance(nested, dict):
+        out |= {k for k, v in nested.items() if isinstance(k, str) and v is None}
+    for key, value in cfg.items():
+        if (isinstance(key, str) and key.startswith("stack.")
+                and len(key) > len("stack.") and value is None):
+            out.add(key[len("stack."):])
+    return frozenset(out)
+
+
+def looks_like_bp_group(spec: Any) -> bool:
+    """Come :func:`is_bp_group`, ma senza pretendere punti ben formati.
+
+    ``is_bp_group`` e' il predicato *ufficiale*, quello che disambigua un
+    gruppo da un breakpoint nudo e da un loop block: pretende che ``elem[0]``
+    sia una lista di liste, quindi dice No a un gruppo scritto male. Alla
+    diagnostica serve il contrario — ``[[[..], 1, 4], 'cubic']`` (una forma
+    compatta infilata al posto dei punti) non e' un gruppo valido ma e'
+    inequivocabilmente un gruppo *sbagliato*, e dirlo e' meglio che tacere.
+    """
+    return (isinstance(spec, (list, tuple)) and len(spec) == 2
+            and isinstance(spec[0], (list, tuple)) and len(spec[0]) > 0
+            and isinstance(spec[1], str))
+
+
+def bp_group_summary(spec: Any) -> Optional[str]:
+    """Riassunto leggibile di un BP group: punti, interp, arco dei tempi.
+
+    ``3 punti · cubic · t 0–1 (assoluti)`` — l'arco compare solo se i tempi
+    del primo e ultimo punto sono numeri. None se ``spec`` non e' un gruppo.
+    """
+    if not is_bp_group(spec):
+        return None
+    points, interp = spec[0], spec[1]
+    n = len(points)
+    parts = [f"{n} {'punto' if n == 1 else 'punti'}", str(interp)]
+    t0 = _num(points[0][0]) if points[0] else None
+    t1 = _num(points[-1][0]) if points[-1] else None
+    if t0 is not None and t1 is not None:
+        parts.append(f"t {t0:g}–{t1:g} (assoluti)")
+    else:
+        parts.append("tempi assoluti")
+    return " · ".join(parts)
 
 
 def in_spread_let(path: KeyPath) -> bool:
@@ -393,6 +607,7 @@ def build(doc: Document) -> StudyModel:
         return m
     m.study_id = data.get("study_id") if isinstance(data.get("study_id"), str) else None
     m.duration = _num(data.get("duration"))
+    m.has_top_duration = "duration" in data
 
     base = data.get("base")
     if isinstance(base, dict):
@@ -401,6 +616,22 @@ def build(doc: Document) -> StudyModel:
         if tm in ("absolute", "normalized"):
             m.time_mode = tm
         m.base_duration = _num(base.get("duration"))
+        m.has_base_duration = "duration" in base
+
+    # Durata di replica dei rami multi-documento: entrambi la iniettano come
+    # ``base.duration`` del documento per-combo/per-istanza, quindi a valle e'
+    # indistinguibile da un default di documento. ``versions`` la inietta solo
+    # se ``versions.duration`` c'e' (senza, il passo della concatenazione
+    # manca e il runtime da' errore per conto suo); ``percorso`` sempre —
+    # senza ``percorso.duration`` esplicita le istanze sono legate e la durata
+    # e' l'intervallo verso la prossima, dedotto da arco/passo o dagli onset.
+    versions = data.get("versions")
+    if isinstance(versions, dict) and "duration" in versions:
+        m.replica_duration_source = "versions.duration"
+        m.replica_duration = _num(versions.get("duration"))
+    percorso = data.get("percorso")
+    if isinstance(percorso, dict):
+        m.replica_duration_source = m.replica_duration_source or "percorso"
 
     axes = data.get("axes")
     if isinstance(axes, dict):
@@ -470,8 +701,25 @@ def build(doc: Document) -> StudyModel:
                             if owned:
                                 n = owned
                                 break
+            # Catena della entry: la ``duration:`` scritta nella entry (che
+            # dopo il merge diventa top-level del documento merged, come
+            # ``onset``) vince sulla sua ``base.duration``; entrambe vincono
+            # sul default di documento.
+            # ``base.duration:`` puntata al primo livello della entry e la
+            # forma annidata sono la stessa cosa (``_expand_dotted_keys``).
+            entry_base = cfg.get("base") if isinstance(cfg.get("base"), dict) else {}
+            sources = [(cfg, "duration"), (entry_base, "duration"),
+                       (cfg, "base.duration")]
+            declared = any(key in node for node, key in sources)
+            dur = next((_num(node[key]) for node, key in sources
+                        if key in node and _num(node[key]) is not None), None)
+            declares_stack = "stack" in cfg or any(
+                isinstance(k, str) and k.startswith("stack.") for k in cfg)
             m.streams[name] = StreamInfo(
                 name=name, cfg=cfg, doc_path=("streams", name),
                 is_spread=is_spread, spread_n=n,
+                duration=dur, declares_duration=declared,
+                declares_stack=declares_stack, stack_paths=stack_paths_of(cfg),
+                stack_nulled=stack_nulled_of(cfg),
             )
     return m

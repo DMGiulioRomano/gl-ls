@@ -25,8 +25,11 @@ from .model import (
     VERSIONS_RESERVED,
     StudyModel,
     expand_over_items,
+    has_compact_frame,
+    is_bp_group,
     is_compact_env,
     is_n_env,
+    looks_like_bp_group,
     n_env_values,
     over_items,
     ramp_count,
@@ -128,12 +131,8 @@ def collect(doc: Document, m: StudyModel) -> List[types.Diagnostic]:
 
 
 def _check_root(bag: Bag, doc: Document, m: StudyModel) -> None:
-    if m.has_stack and m.duration is None:
-        bag.add(("stack",),
-                "stack: serve 'duration:' top-level (la durata condivisa su cui "
-                "il processo normalizza i tempi).",
-                code="stack-duration",
-                data={"fix": {"kind": "add-duration"}})
+    _check_top_duration(bag, doc, m)
+    _check_stack_duration(bag, doc, m)
     axes = doc.get(("axes",))
     if axes is None:
         bag.add(("study_id",) if doc.entry(("study_id",)) else (),
@@ -141,34 +140,126 @@ def _check_root(bag: Bag, doc: Document, m: StudyModel) -> None:
                 types.DiagnosticSeverity.Warning, code="no-axes")
 
 
+def _check_top_duration(bag: Bag, doc: Document, m: StudyModel) -> None:
+    """``duration:`` al top del documento e' vietata (granstudies #42).
 
-# Parametri che l'engine riscala da campioni a secondi (fattore 1/output_sr)
-# quando ``grain.duration_unit: samples`` (``stream._pre_normalize_grain_params``).
-_SAMPLES_SCALED = frozenset({"grain.duration", "grain.duration_range"})
+    Faceva tre lavori — default della durata di stream, passo di
+    concatenazione di ``versions:``, durata del documento nel ramo discrete —
+    e ora ogni ``duration`` sta accanto alla cosa di cui e' la durata. La
+    durata del documento non si scrive: e' ``max(onset + duration)``.
+    Simmetrica al divieto di ``onset`` top-level (#26); il runtime la rifiuta
+    in tutti i rami, ``study_spec.reject_top_level_duration``."""
+    if not m.has_top_duration:
+        return
+    versions = doc.get(("versions",))
+    # Con ``versions:`` senza passo proprio, la lettura piu' probabile del
+    # top-level e' "passo della concatenazione": offrire lo spostamento anche
+    # la' evita di indovinare per l'utente.
+    to_versions = isinstance(versions, dict) and "duration" not in versions
+    hint = ("Rimedio: 'base.duration' per la durata di uno stream (default di "
+            "documento), 'duration:' nella entry per l'override di uno stream, "
+            "'versions.duration' per il passo delle versioni.")
+    bag.add(("duration",),
+            "'duration' non e' una chiave top-level dello studio: la durata "
+            "del documento e' dedotta (max(onset + duration)), non "
+            f"dichiarata. {hint}",
+            code="top-level-duration",
+            data={"fix": {"kind": "move-duration",
+                          "to_versions": to_versions}})
 
 
-def _samples_unit(doc: Document, bpath: KeyPath) -> bool:
-    """True se il blocco engine ``bpath`` lavora in campioni: vale l'override
-    per-stream se dichiarato, altrimenti l'unita' ereditata dal base root
-    (semantica del deep-merge stream su documento)."""
+def _check_stack_duration(bag: Bag, doc: Document, m: StudyModel) -> None:
+    """``stack:`` pretende che ogni stream risolva una durata.
+
+    Non e' piu' un fatto di documento: la durata e' per-stream e si risolve
+    per catena (``duration:`` di entry > ``base.duration``), con la durata di
+    replica di ``versions:``/``percorso:`` come default. L'errore va emesso
+    solo quando NESSUNA fonte la risolve — e va puntato su ``base.duration``,
+    che e' il posto dove si scrive il default.
+
+    Nemmeno la *presenza* dello stack e' un fatto di documento. Il runtime
+    valida il documento **merged per stream** (``study_spec:836``), dove la
+    ``stack:`` di una entry e' diventata top-level: il processo puo' essere
+    attivo per un solo stream. Col blocco top-level ci sono dentro tutti (e'
+    attivo per presenza, anche ``stack: {}``), senza, solo chi ne dichiara uno
+    proprio."""
+    if m.declares_duration():
+        return
+    remedy = ("Dichiara 'base: {duration: <secondi>}' (default per tutti gli "
+              "stream) oppure 'duration:' nella entry dello stream.")
+    if not m.has_stack:
+        # Solo gli stream che portano un ``stack:`` loro sono nel processo.
+        for name, si in m.streams.items():
+            if si.declares_stack and not si.declares_duration:
+                bag.add(("streams", name),
+                        f"stack: lo stream '{name}' dichiara un blocco 'stack:' "
+                        "proprio ma non risolve nessuna 'duration' (ne' propria "
+                        f"ne' ereditata da 'base.duration'). {remedy}",
+                        code="stack-duration",
+                        data={"fix": {"kind": "add-base-duration"}})
+        return
+    # Nessun default di documento: sono in errore gli stream che non ne
+    # dichiarano una propria. Con ``streams:`` popolato l'errore e' loro, uno
+    # per uno; senza streams e' del documento.
+    if m.streams:
+        for name, si in m.streams.items():
+            if si.declares_duration:
+                continue
+            bag.add(("streams", name),
+                    f"stack: lo stream '{name}' non risolve nessuna 'duration' "
+                    f"(ne' propria ne' ereditata da 'base.duration'). {remedy}",
+                    code="stack-duration",
+                    data={"fix": {"kind": "add-base-duration"}})
+        return
+    target: KeyPath = ("base",) if doc.entry(("base",)) else ("stack",)
+    bag.add(target,
+            "stack: nessuna 'duration' risolta per gli stream (ne' propria "
+            f"ne' ereditata da 'base.duration'). {remedy}",
+            code="stack-duration",
+            data={"fix": {"kind": "add-base-duration"}})
+
+
+# Parametri che l'engine riscala verso i secondi quando ``grain.duration_unit``
+# e' dichiarata (``stream._pre_normalize_grain_params``): il fattore dipende
+# dall'unita' — 1/output_sr per ``samples``, 1e-3 per ``milliseconds``.
+_UNIT_SCALED = frozenset({"grain.duration", "grain.duration_range"})
+
+
+def _grain_unit(doc: Document, bpath: KeyPath) -> Optional[str]:
+    """``grain.duration_unit`` che vale per il blocco engine ``bpath``, o None
+    se il blocco lavora in secondi.
+
+    Vale l'override per-stream se dichiarato, altrimenti l'unita' ereditata dal
+    base root (semantica del deep-merge stream su documento). ``seconds``
+    esplicito collassa su None: e' il default, non un'unita' da convertire.
+    Un'unita' fuori vocabolario collassa su None a sua volta — la segnala
+    ``bad-duration-unit``, e senza un fattore noto leggere i valori come
+    secondi e' l'unica lettura onesta."""
     u = doc.get(bpath + ("grain", "duration_unit"))
     if u is None and bpath != ("base",):
         u = doc.get(("base", "grain", "duration_unit"))
-    return u == "samples"
+    if not isinstance(u, str) or u == "seconds" or u not in EI.DURATION_UNITS:
+        return None
+    return u
 
 
 def _check_bounds_value(
     bag: Bag, path: KeyPath, engine_path: str, v: Any, label: str,
-    in_samples: bool = False,
+    grain_unit: Optional[str] = None,
 ) -> None:
+    """Confronto coi bounds engine, che vivono in **secondi**.
+
+    ``grain_unit`` e' l'unita' dichiarata dal blocco (``samples`` |
+    ``milliseconds``): sui path che l'engine riscala il valore va portato in
+    secondi prima del confronto, e il messaggio porta entrambi i numeri."""
     b = EI.bounds_for(engine_path)
     n = _num(v)
     if b is None or n is None:
         return
     note = ""
-    if in_samples and engine_path in _SAMPLES_SCALED:
-        note = f" ({n:g} campioni a {EI.OUTPUT_SR} Hz)"
-        n = n / EI.OUTPUT_SR
+    if grain_unit is not None and engine_path in _UNIT_SCALED:
+        note = EI.unit_note(n, grain_unit)
+        n = n * EI.grain_duration_factor(grain_unit)
     lo, hi = b
     if (lo is not None and n < lo) or (hi is not None and n > hi):
         hi_s = "∞" if hi is None else f"{hi:g}"
@@ -267,6 +358,38 @@ def _generator_from_streams(doc: Document, m: StudyModel, axis: str) -> bool:
     return True
 
 
+def _n_uncovered_streams(doc: Document, m: StudyModel, axis: str) -> List[str]:
+    """Gli stream per cui una banda-Y senza ``n`` resta scoperta.
+
+    Gemello di :func:`_generator_from_streams`, sull'altra meta' della
+    n-ownership: una banda senza ``n`` pretende che sia la camminata-X a
+    possedere il conteggio, e il runtime lo verifica sul documento *merged* per
+    stream. La camminata puo' quindi essere dichiarata nell'override invece che
+    nel blocco ``stack:`` di documento — e, all'inverso, un override puo'
+    *toglierla* con ``asse: null`` e scoprire quello stream soltanto.
+
+    Coperto anche uno stream che scrive un ``n`` proprio sull'asse, o che ne
+    rimpiazza il generatore con uno che enumera (``values``/``ramp``): li' la
+    banda senza ``n`` non c'e' piu', e questa regola non lo riguarda.
+
+    Lista vuota = nessuno scoperto. Senza ``streams:`` decide il documento."""
+    if not m.streams:
+        return [] if m.walk_for(axis) is not None else ["(documento)"]
+    global_spread = doc.get(("spread",))
+    out: List[str] = []
+    for info in m.streams.values():
+        if m.walk_in_stream(axis, info.name):
+            continue
+        cfg = info.cfg if isinstance(info.cfg, dict) else {}
+        spread = (_merged_spread(global_spread, cfg.get("spread"))
+                  if "spread" in cfg else None)
+        paths = _axis_write_paths(cfg, spread)
+        if any(f"{axis}.{mk}" in paths for mk in ("n", "values", "ramp")):
+            continue
+        out.append(info.name)
+    return out
+
+
 def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
     axes = doc.get(("axes",))
     if not isinstance(axes, dict):
@@ -346,11 +469,21 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
         walk = m.walk_for(name)
         if markers == ["base"]:
             _check_band(bag, doc, apath, cfg, f"Asse '{name}'")
-            if "n" not in cfg and walk is None:
+            uncovered = ([] if "n" in cfg
+                         else _n_uncovered_streams(doc, m, name))
+            if uncovered:
+                # se la camminata di documento c'e' ed e' un override a
+                # toglierla, dirlo: altrimenti il messaggio sembra sbagliato
+                # ("ma io il blocco stack ce l'ho")
+                who = ""
+                if walk is not None:
+                    who = (" Gli stream che la annullano (o non la ereditano): "
+                           + ", ".join(f"'{s}'" for s in uncovered) + ".")
                 bag.add(apath,
                         f"Asse '{name}': banda senza 'n' richiede la camminata-X "
                         f"nel blocco 'stack:' (n-ownership: e' la X a possedere n). "
-                        f"Dichiara 'n' oppure 'stack: {{{name}: {{base: ...}}}}'.",
+                        f"Dichiara 'n' oppure 'stack: {{{name}: {{base: ...}}}}'."
+                        + who,
                         code="n-ownership",
                         data={"fix": {"kind": "add-n", "path": list(apath)}})
         elif markers and walk is not None:
@@ -380,11 +513,24 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
         # quello risolto: 'path' esplicito o, se assente, la chiave dell'asse
         engine_path = cfg.get("path", name)
         if isinstance(engine_path, str):
-            in_samples = _samples_unit(doc, ("base",))
+            grain_unit = _grain_unit(doc, ("base",))
             if "baseline" in cfg:
                 _check_bounds_value(bag, apath + ("baseline",), engine_path,
                                     cfg.get("baseline"), f"Asse '{name}' baseline",
-                                    in_samples=in_samples)
+                                    grain_unit=grain_unit)
+            elif engine_path == "grain.duration" and grain_unit is not None:
+                # Il default engine (0.05) e' in secondi e non viene convertito:
+                # finirebbe a valle come 0.05 campioni / 0.05 ms, sempre sotto
+                # il bound minimo. granstudies lo ferma al parse
+                # (``study_spec._resolve_baseline``).
+                label = EI.GRAIN_UNIT_LABELS.get(grain_unit, grain_unit)
+                bag.add(apath,
+                        f"Asse '{name}': con 'grain.duration_unit: {grain_unit}' "
+                        "il 'baseline' e' obbligatorio — il default engine "
+                        f"({EI.PARAMS['grain.duration'].default:g}) e' in secondi "
+                        f"e non verrebbe convertito. Scrivilo in {label}.",
+                        code="baseline-required",
+                        data={"fix": {"kind": "add-baseline", "path": list(apath)}})
             elif EI.needs_baseline(engine_path):
                 why = ("unit-driven (pitch)" if engine_path.startswith("pitch")
                        else "senza default engine")
@@ -397,7 +543,7 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
                 for i, v in enumerate(vals):
                     _check_bounds_value(bag, apath + ("values", i), engine_path, v,
                                         f"Asse '{name}' values[{i}]",
-                                        in_samples=in_samples)
+                                        grain_unit=grain_unit)
 
 
 def _check_band(bag: Bag, doc: Document, path: KeyPath, cfg: Dict[str, Any],
@@ -449,17 +595,30 @@ def _check_band(bag: Bag, doc: Document, path: KeyPath, cfg: Dict[str, Any],
                         code="drift-step", prefer_value=True)
             _check_compact_knob(bag, locate("drift", "step"), drift.get("step"),
                                 f"{label} drift.step")
+            _check_bp_groups(bag, locate("drift", "step"), drift.get("step"),
+                             f"{label} drift.step")
     for border in ("base", "range"):
         _check_env_times(bag, locate(border), cfg.get(border), label)
         _check_compact_knob(bag, locate(border), cfg.get(border),
                             f"{label} {border}")
+        _check_bp_groups(bag, locate(border), cfg.get(border),
+                         f"{label} {border}")
 
 
 def _check_env_times(bag: Bag, path: KeyPath, form: Any, label: str) -> None:
-    """Nei breakpoint di banda i tempi vivono in [0, 1]."""
+    """Nei breakpoint di banda i tempi vivono in [0, 1].
+
+    I BP group (PGE #64) sono esclusi: hanno tempi **assoluti**, quindi una
+    macrozona a t=50 non e' un breakpoint fuori scala — la valida
+    ``_check_bp_groups``. Un gruppo diretto ``[points, interp]`` e' una lista a
+    2 elementi come un breakpoint nudo: senza questa esclusione il controllo
+    leggerebbe ``p[0]`` (una lista di punti) al posto di un tempo."""
+    if is_bp_group(form):
+        return
     pts = None
     if isinstance(form, list) and form and all(
-        isinstance(p, (list, tuple)) and len(p) == 2 for p in form
+        isinstance(p, (list, tuple)) and len(p) == 2 and not is_bp_group(p)
+        for p in form
     ):
         pts = form
     elif isinstance(form, dict) and isinstance(form.get("points"), list):
@@ -485,6 +644,144 @@ def _check_env_times(bag: Bag, path: KeyPath, form: Any, label: str) -> None:
                     "sono normalizzati sulla sequenza).",
                     types.DiagnosticSeverity.Warning, code="band-time",
                     prefer_value=True)
+
+
+# ---------------------------------------------------------------------------
+# BP group ``[points, interp]`` (PGE #64, engine v5.1.0)
+
+
+def _zone_last_time(zone: Any) -> Optional[float]:
+    """Ultimo tempo (assoluto) coperto da una macrozona di envelope.
+
+    Serve solo alla guardia sulla collisione al bordo: BP group -> il tempo
+    dell'ultimo punto; loop block -> il suo ``end_time``; breakpoint nudo ->
+    il proprio tempo. None quando non e' un numero statico."""
+    if is_bp_group(zone):
+        pts = zone[0]
+        return _num(pts[-1][0]) if pts and pts[-1] else None
+    if is_compact_env(zone):
+        return _num(zone[1])
+    if isinstance(zone, (list, tuple)) and len(zone) in (2, 3):
+        return _num(zone[0])
+    return None
+
+
+def _check_bp_group(bag: Bag, path: KeyPath, group: Any, label: str,
+                    engine_path: Optional[str] = None,
+                    grain_unit: Optional[str] = None,
+                    prev_time: Optional[float] = None) -> None:
+    """I vincoli del BP group, piu' i bounds sui suoi punti.
+
+    ``interp`` dell'insieme chiuso (fuori -> ``InvalidFieldValueError`` lato
+    engine), almeno 2 punti (una zona con un punto solo non ha segmenti
+    interni: ``ValueError``), punti ``[t, v]``/``[t, v, type]`` con ``type``
+    per-punto valido — l'override del group interp per quel segmento. Niente
+    forme compatte dentro il gruppo: l'annidamento non esiste.
+
+    ``prev_time`` e' l'ultimo tempo della macrozona precedente: se il primo
+    punto del gruppo non lo supera, l'engine trasla di ``DISCONTINUITY_OFFSET``
+    senza dirlo (come per i loop block) — un warning, non un errore."""
+    points, interp = group[0], group[1]
+    if interp not in EI.INTERPOLATIONS:
+        sug = _suggest(str(interp), EI.INTERPOLATIONS)
+        extra = f" Forse '{sug}'?" if sug else ""
+        bag.add(path + (1,),
+                f"{label}: BP group, interp '{interp}' non valida "
+                f"({' | '.join(EI.INTERPOLATIONS)}).{extra}",
+                code="bp-group-interp", prefer_value=True,
+                data={"fix": {"kind": "rename-value", "new": sug}} if sug else None)
+    if is_compact_env(points):
+        bag.add(path + (0,),
+                f"{label}: BP group con una forma compatta a cicli al posto dei "
+                "punti — l'annidamento non esiste (ne' gruppi dentro pattern "
+                "compatti ne' viceversa). Il gruppo vuole breakpoint "
+                "'[t, v]'/'[t, v, type]' a tempi assoluti.",
+                code="bp-group-nested", prefer_value=True)
+        return
+    if len(points) < 2:
+        bag.add(path + (0,),
+                f"{label}: BP group con {len(points)} punto — servono almeno 2 "
+                "(l'interp del gruppo governa i segmenti *interni*: n punti = "
+                "n-1 segmenti, e con un punto solo non ce n'e' nessuno).",
+                code="bp-group-points", prefer_value=True)
+    for i, p in enumerate(points):
+        ppath = path + (0, i)
+        if is_compact_env(p) or is_bp_group(p):
+            bag.add(ppath,
+                    f"{label}: BP group, il punto {i} e' a sua volta una forma "
+                    "compatta/un gruppo — l'annidamento non esiste (ne' gruppi "
+                    "dentro pattern compatti ne' viceversa).",
+                    code="bp-group-nested", prefer_value=True)
+            continue
+        if not isinstance(p, (list, tuple)) or len(p) not in (2, 3):
+            got = list(p) if isinstance(p, (list, tuple)) else p
+            bag.add(ppath,
+                    f"{label}: BP group, i punti sono '[t, v]' o '[t, v, type]' "
+                    f"(ricevuto {got!r}).",
+                    code="bp-group-point", prefer_value=True)
+            continue
+        if len(p) == 3 and p[2] not in EI.INTERPOLATIONS:
+            bag.add(ppath,
+                    f"{label}: BP group, type per-punto '{p[2]}' non valido "
+                    f"({' | '.join(EI.INTERPOLATIONS)}).",
+                    code="bad-enum", prefer_value=True)
+        if engine_path is not None:
+            y = _num(p[1])
+            if y is not None:
+                _check_bounds_value(bag, ppath, engine_path, y,
+                                    f"{engine_path} t={p[0]!r}",
+                                    grain_unit=grain_unit)
+    first = _num(points[0][0]) if points and points[0] else None
+    if prev_time is not None and first is not None and first <= prev_time:
+        bag.add(path + (0, 0),
+                f"{label}: BP group, il primo punto (t={first:g}) non e' oltre "
+                f"l'ultimo breakpoint della zona precedente (t={prev_time:g}): "
+                "l'engine trasla il bordo di DISCONTINUITY_OFFSET senza "
+                "segnalarlo, come per i loop block.",
+                types.DiagnosticSeverity.Warning, code="bp-group-collision",
+                prefer_value=True)
+
+
+def _check_bp_groups(bag: Bag, path: KeyPath, form: Any, label: str,
+                     engine_path: Optional[str] = None,
+                     grain_unit: Optional[str] = None) -> bool:
+    """Valida i BP group di un envelope, diretto o misto. True se ce n'erano.
+
+    Forma **diretta**: l'envelope *e'* un gruppo (una sola macrozona). Forma
+    **mista**: una lista di macrozone dove i gruppi convivono con loop block e
+    breakpoint nudi. Il ritorno dice al chiamante di non applicare a questa
+    forma i controlli pensati per i breakpoint nudi — i tempi qui sono
+    assoluti."""
+    if looks_like_bp_group(form):
+        _check_bp_group(bag, path, form, label, engine_path, grain_unit)
+        return True
+    if not isinstance(form, (list, tuple)):
+        return False
+    # Forma compatta il cui ``pattern`` e' un BP group: non e' ne' l'una ne'
+    # l'altro per i predicati (``is_compact_env`` vuole tutti i punti del
+    # pattern liste, e un gruppo ha una stringa in coda), quindi senza questo
+    # caso l'annidamento passerebbe muto.
+    if has_compact_frame(form) and looks_like_bp_group(form[0]):
+        bag.add(path + (0,),
+                f"{label}: forma compatta col 'pattern' scritto come BP group "
+                "'[points, interp]' — l'annidamento non esiste. "
+                "L'interpolazione della forma compatta e' il suo quarto "
+                "elemento posizionale.",
+                code="bp-group-nested", prefer_value=True)
+        return True
+    if is_compact_env(form):
+        return False
+    if not any(looks_like_bp_group(z) for z in form):
+        return False
+    prev: Optional[float] = None
+    for i, zone in enumerate(form):
+        if looks_like_bp_group(zone):
+            _check_bp_group(bag, path + (i,), zone, f"{label} zona {i}",
+                            engine_path, grain_unit, prev_time=prev)
+        last = _zone_last_time(zone)
+        if last is not None:
+            prev = last
+    return True
 
 
 def _check_ramp(bag: Bag, path: KeyPath, r: Any, label: str,
@@ -663,12 +960,18 @@ def _check_stack(bag: Bag, doc: Document, m: StudyModel, prefix: KeyPath) -> Non
 
 def _check_walk_runaway(bag: Bag, doc: Document, m: StudyModel,
                         epath: KeyPath, cfg: Dict[str, Any], name: str) -> None:
-    """Stima anti-runaway: banda che genererebbe troppi breakpoint."""
+    """Stima anti-runaway: banda che genererebbe troppi breakpoint.
+
+    La durata da cui dipende la stima e' quella *risolta dello stream* a cui la
+    camminata appartiene (granstudies #42): due stream dello stesso documento
+    possono averne una diversa, e il top-level non esiste piu'."""
     from . import convert
 
-    if m.duration is None or m.duration <= 0:
+    in_stream = epath[:1] == ("streams",)
+    duration = m.duration_for(str(epath[1]) if in_stream else None)
+    if duration is None or duration <= 0:
         return
-    walk = m.walk_for(name) if not epath[:1] == ("streams",) else None
+    walk = m.walk_for(name) if not in_stream else None
     unit = (cfg.get("unit") if isinstance(cfg.get("unit"), str)
             else (walk.unit if walk else (m.stack_unit or "hz")))
     if unit not in EI.X_UNITS:
@@ -697,11 +1000,11 @@ def _check_walk_runaway(bag: Bag, doc: Document, m: StudyModel,
     step = steps[unit](mean)
     if step <= 0:
         return
-    est = m.duration / step
+    est = duration / step
     if est > MAX_WALK_POINTS:
         bag.add(epath + ("base",),
                 f"stack.{name}: ~{int(est)} breakpoint stimati (> {MAX_WALK_POINTS}) "
-                f"su duration={m.duration:g}s — il walk andrebbe in errore "
+                f"su duration={duration:g}s — il walk andrebbe in errore "
                 "anti-runaway.",
                 types.DiagnosticSeverity.Warning, code="walk-runaway",
                 prefer_value=True)
@@ -1359,12 +1662,29 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
                                   "path": list(bpath + ("grain", "reverse"))}})
         axis_governs_duration = any(
             ax.path == "grain.duration" for ax in m.axes.values())
-        if (grain.get("duration_unit") == "samples" and "duration" not in grain
-                and not axis_governs_duration):
+        # Il vincolo vale per OGNI unita' non-secondi, non solo per i campioni:
+        # senza ``grain.duration`` esplicita la base resta in secondi mentre
+        # ``duration_range`` (e i valori d'asse) sono nell'unita' dichiarata.
+        declared_unit = grain.get("duration_unit")
+        if declared_unit is not None and declared_unit not in EI.DURATION_UNITS:
+            sug = (_suggest(str(declared_unit), EI.DURATION_UNITS)
+                   if isinstance(declared_unit, str) else None)
+            extra = f" Forse '{sug}'?" if sug else ""
             bag.add(bpath + ("grain", "duration_unit"),
-                    "Con duration_unit: samples la grain.duration va sempre "
-                    "indicata esplicitamente (il default 0.05 e' in secondi).",
-                    code="samples-duration")
+                    f"duration_unit '{declared_unit}' non ammessa "
+                    f"({' | '.join(EI.DURATION_UNITS)}).{extra}",
+                    code="bad-duration-unit", prefer_value=True,
+                    data={"fix": {"kind": "rename-value", "new": sug}} if sug else None)
+        if (isinstance(declared_unit, str) and declared_unit != "seconds"
+                and declared_unit in EI.DURATION_UNITS
+                and "duration" not in grain and not axis_governs_duration):
+            label = EI.GRAIN_UNIT_LABELS.get(declared_unit, declared_unit)
+            bag.add(bpath + ("grain", "duration_unit"),
+                    f"Con duration_unit: {declared_unit} la grain.duration va "
+                    "sempre indicata esplicitamente (il default "
+                    f"{EI.PARAMS['grain.duration'].default:g} e' in secondi, non "
+                    f"in {label}).",
+                    code="grain-unit-duration")
     pointer = base.get("pointer")
     if isinstance(pointer, dict):
         if "loop_end" in pointer and "loop_dur" in pointer:
@@ -1379,7 +1699,7 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
                     "cavallo della fine del file usa loop_dur.",
                     code="loop-order", prefer_value=True)
     # bounds sui parametri noti (scalari ed envelope)
-    in_samples = _samples_unit(doc, bpath)
+    grain_unit = _grain_unit(doc, bpath)
     for dotted, info in EI.PARAMS.items():
         parts = tuple(dotted.split("."))
         if parts[0] in ("onset", "duration") and len(parts) == 1:
@@ -1388,13 +1708,18 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
         if v is None:
             continue
         _check_param_bounds(bag, bpath + parts, dotted, v, m,
-                            in_samples=in_samples)
+                            grain_unit=grain_unit)
 
 
 def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
-                        m: StudyModel, in_samples: bool = False) -> None:
+                        m: StudyModel, grain_unit: Optional[str] = None) -> None:
     if _num(v) is not None:
-        _check_bounds_value(bag, path, dotted, v, dotted, in_samples=in_samples)
+        _check_bounds_value(bag, path, dotted, v, dotted, grain_unit=grain_unit)
+        return
+    # BP group, diretto o misto (PGE #64): i punti del gruppo vengono validati
+    # e confrontati coi bounds la' dentro, sui loro tempi assoluti. Senza
+    # questo ramo un gruppo passava muto e i suoi Y non venivano mai visti.
+    if _check_bp_groups(bag, path, v, dotted, dotted, grain_unit):
         return
     pts: Optional[list] = None
     ppath = path
@@ -1405,6 +1730,8 @@ def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
     elif isinstance(v, dict) and isinstance(v.get("points"), list):
         pts = v["points"]
         ppath = path + ("points",)
+        if _check_bp_groups(bag, ppath, pts, dotted, dotted, grain_unit):
+            return
     if not pts:
         return
     for i, p in enumerate(pts):
@@ -1412,7 +1739,7 @@ def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
             y = _num(p[1])
             if y is not None:
                 _check_bounds_value(bag, ppath + (i,), dotted, y,
-                                    f"{dotted} t={p[0]!r}", in_samples=in_samples)
+                                    f"{dotted} t={p[0]!r}", grain_unit=grain_unit)
             if len(p) == 3 and p[2] not in EI.INTERPOLATIONS:
                 bag.add(ppath + (i,),
                         f"{dotted}: type per-punto '{p[2]}' non valido "
@@ -1697,6 +2024,17 @@ def _check_compact_knob(bag: Bag, path: KeyPath, spec: Any, label: str) -> None:
                 code="compact-end-time", prefer_value=True,
                 data={"fix": {"kind": "rename-value", "new": "1"}})
     for i, p in enumerate(spec[0]):
+        # un BP group dentro il pattern e' una lista a 2 elementi, quindi
+        # passerebbe il controllo sulle coppie: l'annidamento non esiste (PGE
+        # #64), ne' gruppi dentro pattern compatti ne' viceversa
+        if is_bp_group(p):
+            bag.add(path + (0, i),
+                    f"{label}: forma compatta, il punto {i} del pattern e' un "
+                    "BP group '[points, interp]' — l'annidamento non esiste. "
+                    "L'interpolazione della forma compatta e' il suo quarto "
+                    "elemento posizionale.",
+                    code="bp-group-nested", prefer_value=True)
+            continue
         if len(p) != 2:
             bag.add(path + (0, i),
                     f"{label}: forma compatta, i punti del pattern devono "

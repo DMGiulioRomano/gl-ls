@@ -13,7 +13,6 @@ scriverebbero lo stesso campo.
 from glls import completion, diagnostics, hover, model, yamlpos
 
 BASE = """study_id: t
-duration: 20
 base:
   onset: 0
   duration: 6
@@ -262,6 +261,6 @@ def test_hover_su_n_documenta_la_forma_env():
 def test_snippet_n_nel_tempo_nel_contesto_spread():
     text = BASE + "streams:\n  fan:\n    spread:\n      \n"
     doc = yamlpos.parse(text)
-    items = completion.complete(doc, model.build(doc), 13, 6)
+    items = completion.complete(doc, model.build(doc), 12, 6)
     (item,) = [i for i in items if i.label == "n_nel_tempo"]
     assert item.insert_text.startswith("n: [[0, ${1:1}], [1, ${2:4}]]")

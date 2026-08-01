@@ -14,7 +14,6 @@ from .lsp_client import LspClient, apply_edits
 URI = "file:///tmp/study.yml"
 
 STUDY = """study_id: e2e_test
-duration: 20
 base:
   onset: 0
   duration: 6
@@ -294,7 +293,6 @@ def test_unit_conversion_roundtrip_s_to_hz(client):
 def test_duration_rescale_action(client):
     uri = "file:///tmp/rescale.yml"
     text = """study_id: rescale_test
-duration: 20
 base:
   onset: 0
   duration: 20
@@ -307,11 +305,12 @@ axes:
     values: [10, 30]
 """
     client.open(uri, text)
-    # l'utente cambia la duration top-level 20 -> 30
-    changed = text.replace("duration: 20\nbase:", "duration: 30\nbase:")
+    # l'utente cambia base.duration 20 -> 30 (granstudies #42: la durata di uno
+    # stream vive li', non piu' al top del documento)
+    changed = text.replace("  duration: 20\n", "  duration: 30\n")
     client.change(uri, changed, 2)
     lines = changed.split("\n")
-    dur_line = lines.index("duration: 30")
+    dur_line = lines.index("  duration: 30")
     result = client.request("textDocument/codeAction", {
         "textDocument": {"uri": uri},
         "range": {"start": {"line": dur_line, "character": 0},
@@ -410,7 +409,6 @@ def test_diagnostics_update_on_change(client):
 # spread.over: chiavi puntate (issue #3)
 
 DOTTED = """study_id: dotted
-duration: 20
 base:
   onset: 0
   duration: 6

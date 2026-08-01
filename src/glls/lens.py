@@ -65,10 +65,13 @@ def lenses(doc: Document, m: StudyModel) -> List[types.CodeLens]:
             out.append(lens)
 
     for name, walk in m.walks.items():
-        est = _walk_estimate(m, walk.cfg, walk.unit)
+        # la stima vive sulla durata *risolta* del documento (granstudies #42:
+        # non c'e' piu' un ``duration:`` top-level da leggere)
+        duration = m.duration_for()
+        est = _walk_estimate(duration, walk.cfg, walk.unit)
         title = f"camminata-X in {walk.unit}"
         if est is not None:
-            title += f" · ~{est} breakpoint su {fmt_num(m.duration)}s"
+            title += f" · ~{est} breakpoint su {fmt_num(duration)}s"
         lens = _lens(doc, ("stack", name), title)
         if lens:
             out.append(lens)
@@ -90,8 +93,8 @@ def lenses(doc: Document, m: StudyModel) -> List[types.CodeLens]:
     return out
 
 
-def _walk_estimate(m: StudyModel, cfg: dict, unit: str) -> Optional[int]:
-    if not m.duration or m.duration <= 0:
+def _walk_estimate(duration: Optional[float], cfg: dict, unit: str) -> Optional[int]:
+    if not duration or duration <= 0:
         return None
     bpts = env_points(cfg.get("base"))
     rpts = env_points(cfg.get("range")) if cfg.get("range") is not None else [(0.0, 0.0)]
@@ -110,4 +113,4 @@ def _walk_estimate(m: StudyModel, cfg: dict, unit: str) -> Optional[int]:
             "bpm": lambda v: 60.0 / v}.get(unit, lambda v: 1.0 / v)(mean)
     if step <= 0:
         return None
-    return int(m.duration / step)
+    return int(duration / step)

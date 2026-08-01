@@ -2,7 +2,6 @@
 from glls import diagnostics, model, yamlpos
 
 BASE = """study_id: t
-duration: 20
 base:
   onset: 0
   duration: 6
@@ -29,8 +28,96 @@ def test_valid_study_no_diagnostics():
 
 
 def test_stack_requires_duration():
-    text = BASE.replace("duration: 20\n", "") + "stack: {}\n"
+    # nessuna fonte risolve una durata: ne' base.duration ne' una entry
+    text = BASE.replace("  duration: 6\n", "") + "stack: {}\n"
     assert "stack-duration" in codes(text)
+
+
+def test_stack_duration_from_base_not_flagged():
+    # base.duration e' il default di documento: gli stream la ereditano
+    assert "stack-duration" not in codes(BASE + "stack: {}\n")
+
+
+def test_stack_duration_from_stream_entry_not_flagged():
+    text = BASE.replace("  duration: 6\n", "") + """stack: {}
+streams:
+  a:
+    duration: 12
+"""
+    assert "stack-duration" not in codes(text)
+
+
+def test_stack_duration_flagged_only_on_the_orphan_stream():
+    text = BASE.replace("  duration: 6\n", "") + """stack: {}
+streams:
+  a:
+    duration: 12
+  b:
+    base:
+      volume: -6
+"""
+    ds = [d for d in diags_of(text) if d.code == "stack-duration"]
+    assert len(ds) == 1 and "'b'" in ds[0].message
+
+
+def test_stack_duration_from_stream_base_not_flagged():
+    text = BASE.replace("  duration: 6\n", "") + """stack: {}
+streams:
+  a:
+    base:
+      duration: 12
+"""
+    assert "stack-duration" not in codes(text)
+
+
+def test_stack_duration_from_versions_duration_not_flagged():
+    # il passo delle versioni viene iniettato come base.duration della combo
+    text = BASE.replace("  duration: 6\n", "") + """stack: {}
+versions:
+  duration: 50
+  d0: {values: [1, 2]}
+"""
+    assert "stack-duration" not in codes(text)
+
+
+def test_stack_duration_still_missing_with_versions_without_step():
+    text = BASE.replace("  duration: 6\n", "") + """stack: {}
+versions:
+  onset: {values: [0, 50]}
+  d0: {values: [1, 2]}
+"""
+    assert "stack-duration" in codes(text)
+
+
+# --- il divieto di 'duration:' top-level (granstudies #42) -------------------
+
+
+def test_top_level_duration_forbidden():
+    text = "duration: 20\n" + BASE
+    d = next(d for d in diags_of(text) if d.code == "top-level-duration")
+    assert "base.duration" in d.message and "versions.duration" in d.message
+
+
+def test_top_level_duration_forbidden_also_with_versions():
+    text = "duration: 20\n" + BASE + "versions:\n  d0: {values: [1, 2]}\n"
+    d = next(d for d in diags_of(text) if d.code == "top-level-duration")
+    assert d.data["fix"]["to_versions"] is True
+
+
+def test_top_level_duration_fix_targets_base_when_versions_has_step():
+    text = ("duration: 20\n" + BASE
+            + "versions:\n  duration: 50\n  d0: {values: [1, 2]}\n")
+    d = next(d for d in diags_of(text) if d.code == "top-level-duration")
+    assert d.data["fix"]["to_versions"] is False
+
+
+def test_top_level_duration_replaces_the_stack_duration_error():
+    # un solo errore, quello vero: il rimedio (spostala in base.duration) copre
+    # anche il bisogno dello stack, quindi non si urla due volte
+    text = ("duration: 20\n" + BASE.replace("  duration: 6\n", "")
+            + "stack: {}\n")
+    cs = codes(text)
+    assert "top-level-duration" in cs and "stack-duration" not in cs
 
 
 def test_axis_without_generator():
@@ -345,7 +432,7 @@ def test_grain_duration_range_samples_not_flagged():
 def test_grain_duration_samples_without_duration_flagged():
     text = BASE.replace("base:\n",
                         "base:\n  grain:\n    duration_unit: samples\n")
-    assert "samples-duration" in codes(text)
+    assert "grain-unit-duration" in codes(text)
 
 
 def test_grain_duration_samples_governed_by_axis_not_flagged():
@@ -354,7 +441,98 @@ def test_grain_duration_samples_governed_by_axis_not_flagged():
     # 'duration' esplicita in base non serve.
     text = (BASE.replace("base:\n", "base:\n  grain:\n    duration_unit: samples\n")
             + "  grain.duration:\n    baseline: 512\n    values: [256, 1024]\n")
-    assert "samples-duration" not in codes(text)
+    assert "grain-unit-duration" not in codes(text)
+
+
+# --- grain.duration_unit: milliseconds (PGE v5.2.0, gl-ls #35) --------------
+
+
+def test_grain_duration_milliseconds_scalar_not_flagged():
+    # 650 ms = 0.65 s: letti come secondi sarebbero > 10 (falso positivo)
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 650\n    duration_unit: milliseconds\n")
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_grain_duration_milliseconds_real_violation_flagged():
+    # 20000 ms = 20 s: fuori bounds anche dopo la conversione
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 20000\n    duration_unit: milliseconds\n")
+    d = next(d for d in diags_of(text) if d.code == "out-of-bounds")
+    assert "ms" in d.message and "48000 Hz" not in d.message
+
+
+def test_grain_duration_range_milliseconds_not_flagged():
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 175\n    duration_range: 125\n"
+        "    duration_unit: milliseconds\n")
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_axis_baseline_milliseconds_not_flagged():
+    # la scala 50-300 ms: il baseline al centro e' valido, non 175 s
+    text = (BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 175\n    duration_unit: milliseconds\n")
+        + "  grain.duration: {baseline: 175}\n")
+    assert "out-of-bounds" not in codes(text)
+
+
+def test_grain_duration_milliseconds_without_duration_flagged():
+    text = BASE.replace(
+        "base:\n", "base:\n  grain:\n    duration_unit: milliseconds\n")
+    d = next(d for d in diags_of(text) if d.code == "grain-unit-duration")
+    assert "milliseconds" in d.message
+
+
+def test_grain_duration_unit_seconds_explicit_not_flagged():
+    # 'seconds' e' il default: non chiede una duration esplicita
+    text = BASE.replace(
+        "base:\n", "base:\n  grain:\n    duration_unit: seconds\n")
+    assert "grain-unit-duration" not in codes(text)
+
+
+def test_axis_grain_duration_baseline_required_with_unit():
+    # senza baseline il default engine (0.05 s) finirebbe a valle come 0.05 ms
+    text = (BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 175\n    duration_unit: milliseconds\n")
+        + "  grain.duration: {values: [100, 300]}\n")
+    d = next(d for d in diags_of(text) if d.code == "baseline-required")
+    assert "milliseconds" in d.message and "grain.duration" in d.message
+
+
+def test_axis_grain_duration_baseline_not_required_in_seconds():
+    # senza duration_unit il default engine c'e' e vale: nessun obbligo
+    text = BASE + "  grain.duration: {values: [0.01, 0.03]}\n"
+    assert "baseline-required" not in codes(text)
+
+
+def test_bad_duration_unit_flagged_with_suggestion():
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 175\n    duration_unit: millisecond\n")
+    d = next(d for d in diags_of(text) if d.code == "bad-duration-unit")
+    assert "milliseconds" in d.message
+
+
+def test_bad_duration_unit_values_read_as_seconds():
+    # unita' ignota = fattore ignoto: 175 resta 175 s, fuori bounds
+    text = BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 175\n    duration_unit: ms\n")
+    assert "out-of-bounds" in codes(text)
+
+
+def test_axis_grain_duration_baseline_required_with_samples():
+    text = (BASE.replace(
+        "base:\n",
+        "base:\n  grain:\n    duration: 512\n    duration_unit: samples\n")
+        + "  grain.duration: {values: [256, 1024]}\n")
+    assert "baseline-required" in codes(text)
 
 
 def test_grain_duration_samples_axis_values_not_flagged():

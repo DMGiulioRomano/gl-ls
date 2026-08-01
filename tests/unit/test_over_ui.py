@@ -2,7 +2,6 @@
 from glls import completion, hover, model, semtokens, yamlpos
 
 BASE = """study_id: t
-duration: 20
 base:
   onset: 0
   duration: 6

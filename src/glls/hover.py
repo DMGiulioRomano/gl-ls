@@ -14,9 +14,9 @@ from lsprotocol import types
 from . import engine_info as EI
 from . import schema
 from .convert import as_num as _num, fmt_num
-from .model import (AXES_RESERVED, STACK_RESERVED, StudyModel, compact_summary,
-                    in_spread_let, is_compact_env, split_over_key,
-                    split_spread_over_key)
+from .model import (AXES_RESERVED, STACK_RESERVED, StudyModel, bp_group_summary,
+                    compact_summary, in_spread_let, is_bp_group,
+                    is_compact_env, split_over_key, split_spread_over_key)
 from .yamlpos import Document, KeyPath
 
 
@@ -164,9 +164,21 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
         walk = m.walk_for(str(path[-2]))
         if walk:
             text += f"\n\nUnit risolta per quest'asse: **{walk.unit}**"
-    if str(name) == "duration" and ctx == "root":
+    if str(name) == "duration" and ctx in ("engine_stream", "stream_override"):
         text += ("\n\nCode action disponibile dopo una modifica: *riscala i "
                  "breakpoint assoluti degli envelope al nuovo valore*.")
+    if str(name) == "duration" and ctx == "root":
+        # dire dove la durata si risolve *in questo documento* rende concreto
+        # il rimedio: spesso la chiave giusta c'e' gia' e il top-level e' un
+        # residuo da cancellare
+        if m.has_base_duration:
+            text += (f"\n\nQui `base.duration` c'e' gia' "
+                     f"({fmt_num(m.base_duration)} s): la durata degli stream e' "
+                     "quella, questa riga e' un residuo.")
+        elif m.replica_duration_source is not None:
+            text += (f"\n\nQui c'e' `{m.replica_duration_source}`: la durata di "
+                     "replica viene iniettata come `base.duration` e fa da "
+                     "default per gli stream.")
     # la forma compatta a cicli non e' un fatto del ``let:``: vale in ogni Env
     # che passa da ``expand_params`` (base/range di banda e camminata, drift.step),
     # e li' la legenda dei posizionali serve quanto sopra una manopola
@@ -174,6 +186,12 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
     if compact is not None:
         text += (f"\n\nValore in **forma compatta a cicli** — {compact}.\n\n"
                  + schema.COMPACT_ENV_DOC)
+    # il BP group e' l'altra forma posizionale dell'engine: stessa esigenza
+    # (la legenda), e in piu' la sorpresa dei tempi assoluti
+    group = bp_group_summary(doc.get(path))
+    if group is not None:
+        text += (f"\n\nValore in **BP group** — {group}.\n\n"
+                 + schema.BP_GROUP_DOC)
     return _md(text, rng)
 
 
@@ -200,11 +218,47 @@ def _dotted_engine_path(path: KeyPath) -> Optional[str]:
     return dotted if dotted in EI.PARAMS else None
 
 
+def _bp_group_slot(doc: Document, path: KeyPath) -> Optional[str]:
+    """Hover dei posizionali di un BP group: ``interp`` e il run di punti.
+
+    Il gruppo e' posizionale come la forma compatta, e qui la posizione 1 non
+    e' un breakpoint ma l'interpolazione della macrozona — leggerla come un
+    valore qualsiasi non dice niente."""
+    if not path or not isinstance(path[-1], int):
+        return None
+    group = doc.get(path[:-1])
+    if not is_bp_group(group):
+        return None
+    if path[-1] == 1:
+        interp = group[1]
+        known = EI.INTERPOLATIONS
+        head = (f"**`interp` del BP group** = `{interp}`"
+                if interp in known
+                else f"**`interp` del BP group** = `{interp}` — non valido "
+                     f"({' | '.join(known)})")
+        return (head + "\n\nGoverna i **segmenti interni** della macrozona "
+                "(n punti = n-1 segmenti): il gap in uscita resta al default "
+                "globale, e questo interp non diventa il tipo globale "
+                "dell'envelope. Un `type` per-punto lo scavalca sul suo "
+                "segmento.\n\n" + schema.BP_GROUP_DOC)
+    if path[-1] == 0:
+        return (f"**Punti del BP group** — {bp_group_summary(group)}.\n\n"
+                + schema.BP_GROUP_DOC)
+    return None
+
+
 def _hover_value(doc: Document, m: StudyModel, path: KeyPath,
                  rng: Optional[types.Range]) -> Optional[types.Hover]:
     value = doc.get(path)
     parent_key = path[-1] if path and isinstance(path[-1], str) else None
     n = _num(value)
+
+    slot = _bp_group_slot(doc, path)
+    if slot is not None:
+        return _md(slot, rng)
+    group = bp_group_summary(value)
+    if group is not None:
+        return _md(f"**BP group** — {group}.\n\n" + schema.BP_GROUP_DOC, rng)
 
     # valori della camminata-X: conversioni di unita'
     walk_axis = _walk_axis_of(path)
@@ -232,7 +286,7 @@ def _hover_value(doc: Document, m: StudyModel, path: KeyPath,
 
     # tempo normalizzato -> secondi
     if n is not None and 0 <= n <= 1 and _is_env_time(doc, path):
-        dur = m.duration or m.base_duration
+        dur = m.duration_for(_stream_of(path))
         if dur:
             return _md(f"t = **{fmt_num(n)}** → {fmt_num(n * dur)} s "
                        f"(su duration {fmt_num(dur)} s)", rng)
@@ -244,6 +298,16 @@ def _hover_value(doc: Document, m: StudyModel, path: KeyPath,
         if dotted == "density":
             text += f"\n\n{EI.density_zone(n)}"
         return _md(text, rng)
+    return None
+
+
+def _stream_of(path: KeyPath) -> Optional[str]:
+    """Nome dello stream se il path vive dentro una entry di ``streams:``.
+
+    La durata e' per-stream (granstudies #42): un tempo normalizzato dentro un
+    override si legge sulla durata di QUELLO stream."""
+    if len(path) >= 2 and path[0] == "streams" and isinstance(path[1], str):
+        return path[1]
     return None
 
 

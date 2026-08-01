@@ -10,7 +10,6 @@ from glls import diagnostics, model, schema, yamlpos
 from glls.model import expand_over_items, over_items, split_spread_over_key
 
 BASE = """study_id: t
-duration: 20
 base:
   onset: 0
   duration: 6
