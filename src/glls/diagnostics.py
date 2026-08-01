@@ -17,7 +17,7 @@ from lsprotocol import types
 
 from . import engine_info as EI
 from .convert import as_num as _num
-from . import exprlang, schema
+from . import codes, exprlang, schema
 from .model import (
     AXES_RESERVED,
     GEN_MARKERS,
@@ -123,6 +123,7 @@ def collect(doc: Document, m: StudyModel) -> List[types.Diagnostic]:
     _check_engine_block(bag, doc, m, ("base",))
     _check_let_blocks(bag, doc, m)
     _check_unknown_keys(bag, doc, m)
+    _check_corredi(bag, doc, m)
     _check_expr_nodes(bag, doc, m)
     return bag.items
 
@@ -1213,7 +1214,8 @@ def _check_spread(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath,
     if not isinstance(spread, dict):
         bag.add(spath, "'spread' e' un dict {n?, over, sweep?}.", code="spread-type")
         return
-    n_decl = _check_spread_n(bag, spath, spread.get("n"))
+    n_decl = _check_spread_n(bag, spath, spread.get("n"),
+                             _outer_knob_names(doc, spath))
     # forma annidata ``over: {...}`` + chiavi dotted ``over.<path>`` al primo
     # livello (granstudies ``_expand_spread_dotted``): stesse entry, fuse
     items = over_items(spread)
@@ -1318,12 +1320,17 @@ def _report_strategy_count(bag: Bag, spath: KeyPath, oe, markers: List[str]) -> 
                 code="spread-strategy")
 
 
-def _check_spread_n(bag: Bag, spath: KeyPath, raw_n: Any) -> Optional[int]:
+def _check_spread_n(bag: Bag, spath: KeyPath, raw_n: Any,
+                    esterne: Optional[Dict[str, Any]] = None) -> Optional[int]:
     """``spread.n`` normalizzato: intero >= 1, Env (il picco), o nodo-expr
     valutato (percorso-v1).
 
-    Nel nodo-expr il runtime non inietta ``i``/``n`` (li possiede lo spread):
-    lo scope e' il solo ``let``, e il risultato deve essere un intero >= 1."""
+    Nel nodo-expr il runtime non inietta ``i``/``n`` (li possiede lo spread) e
+    nemmeno le manopole di voce di ``spread.let``, che al momento in cui ``n``
+    si calcola non esistono ancora. Inietta invece le manopole di **documento e
+    di gruppo**: ``n: {expr: "k"}`` con ``k`` nel ``let:`` funziona, ed e' la
+    forma con cui ``n: {expr: "len(ratio)"}`` lega la popolazione a un corredo.
+    """
     if raw_n is None:
         return None
     if is_n_env(raw_n):
@@ -1331,7 +1338,7 @@ def _check_spread_n(bag: Bag, spath: KeyPath, raw_n: Any) -> Optional[int]:
     if exprlang.is_expr_node(raw_n):
         try:
             text, let = exprlang.parse_expr_node(raw_n)
-            out = exprlang.eval_expr(text, dict(let))
+            out = exprlang.eval_expr(text, {**(esterne or {}), **let})
         except ValueError as e:
             bag.add(spath + ("n",), str(e), code="expr", prefer_value=True)
             return None
@@ -1437,20 +1444,43 @@ def _is_gate_level(doc: Document, volume: Any, vkp: KeyPath) -> bool:
 _LET_BAND_KEYS = frozenset({"base", "range", "seed", "distribution", "drift"})
 
 
+def _outer_knob_names(doc: Document, spath: KeyPath) -> Dict[str, Any]:
+    """Le manopole di ``let:`` **fuori** dallo spread: documento e gruppo.
+
+    Sono quelle che il runtime inietta per nome nei nodi-expr dello spread
+    prima di valutarli, ``spread.n`` compreso. I corredi entrano tipati: li'
+    il tipo e' proprio cio' che serve, perche' ``ratio[i]`` e ``len(ratio)``
+    si valutano solo su un corredo, e legarli a uno scalare darebbe «non e' un
+    corredo» su codice giusto.
+    """
+    def _lega(blocco: Any) -> Dict[str, Any]:
+        if not isinstance(blocco, dict):
+            return {}
+        return {
+            k: (_corredo_binding(v) if exprlang.is_corredo(v) else 1.0)
+            for k, v in blocco.items()
+        }
+
+    names: Dict[str, Any] = dict(_lega(doc.get(("let",))))
+    if spath and spath[0] == "streams" and len(spath) >= 2:
+        names.update(_lega(doc.get(("streams", spath[1], "let"))))
+    return names
+
+
 def _spread_scope_names(doc: Document, spath: KeyPath, spread: Any) -> Dict[str, Any]:
     """Le manopole ``let:`` in scope per le expr di uno spread — documento,
     gruppo (se lo spread e' di uno stream) e voce (``spread.let``) — legate a
-    uno scalare neutro: servono solo a risolvere i nomi, non a tipizzare."""
-    names: Dict[str, Any] = {}
-    dl = doc.get(("let",))
-    if isinstance(dl, dict):
-        names.update({k: 1.0 for k in dl})
-    if spath and spath[0] == "streams" and len(spath) >= 2:
-        gl = doc.get(("streams", spath[1], "let"))
-        if isinstance(gl, dict):
-            names.update({k: 1.0 for k in gl})
+    uno scalare neutro: servono solo a risolvere i nomi, non a tipizzare.
+
+    L'eccezione sono i **corredi**: li' il tipo e' proprio cio' che serve, perche'
+    ``ratio[i]`` e ``len(ratio)`` si valutano solo su un corredo. Legarli a uno
+    scalare darebbe «non e' un corredo» su codice giusto.
+    """
+    names: Dict[str, Any] = dict(_outer_knob_names(doc, spath))
     vl = spread.get("let") if isinstance(spread, dict) else None
     if isinstance(vl, dict):
+        # Le manopole di voce sono scalari per definizione (un valore per
+        # voce); un corredo dichiarato qui e' errore, lo dice ``_check_corredi``.
         names.update({k: 1.0 for k in vl})
     return names
 
@@ -1882,11 +1912,63 @@ def _knob_binding(val: Any) -> Any:
     if isinstance(val, list):
         return _ENV_PLACEHOLDER            # envelope disegnato o [a, b]
     if isinstance(val, dict):
+        if exprlang.is_corredo(val):
+            return _corredo_binding(val)   # il corredo resta un corredo
         if exprlang.is_expr_node(val):
             return 1.0                     # nodo-expr derivato: scalare, ai fini del check
+        if exprlang.LINEAR_ENV_KEY in val:
+            return _ENV_PLACEHOLDER        # il wrapper di ruolo produce un Env
         if any(mk in val for mk in _ENV_FORM_MARKERS):
             return _ENV_PLACEHOLDER        # banda/ramp/values -> Env
     return 1.0
+
+
+def _corredo_binding(val: Dict[str, Any]) -> Any:
+    """Il corredo con cui una manopola ``{list: ...}`` entra in una expr.
+
+    Il runtime lo risolve al load; qui va ricostruito, e cio' che conta e' la
+    **lunghezza esatta** — la usano ``len()``, il controllo di fuori range e il
+    rilievo del corredo sotto-consumato. I valori contano meno: servono solo a
+    non far fallire una expr che li usa, e per il corredo pescato non sono
+    calcolabili senza il seed del runtime, quindi li' si ripiega su un
+    rappresentante (la stessa scelta che ``_ENV_PLACEHOLDER`` fa per le bande).
+
+    Un corredo malformato torna com'e': a dirlo e' ``_check_corredi``, con la
+    posizione nello YAML, non questa funzione.
+    """
+    dentro = val.get(exprlang.CORREDO_KEY)
+    fuori = {k: v for k, v in val.items() if k == exprlang.CYCLE_KEY}
+    if isinstance(dentro, list):
+        return val
+    if not isinstance(dentro, dict):
+        return val
+    if isinstance(dentro.get("values"), list):
+        return {exprlang.CORREDO_KEY: list(dentro["values"]), **fuori}
+    if isinstance(dentro.get("ramp"), dict):
+        quanti = ramp_count(dentro["ramp"])
+        if quanti:
+            return {exprlang.CORREDO_KEY: _serie(dentro["ramp"], quanti), **fuori}
+        return val
+    n = dentro.get("n")
+    if isinstance(n, int) and not isinstance(n, bool) and n >= 1:
+        base = dentro.get("base")
+        rappresentante = float(base) if _is_number(base) else 1.0
+        return {exprlang.CORREDO_KEY: [rappresentante] * n, **fuori}
+    return val
+
+
+def _serie(ramp: Dict[str, Any], quanti: int) -> List[float]:
+    """I valori di un ramp pieno, per dare al corredo generato i suoi numeri."""
+    start, step = ramp.get("start"), ramp.get("step")
+    if not (_is_number(start) and _is_number(step)):
+        return [1.0] * quanti
+    stop = ramp.get("stop")
+    verso = -1 if _is_number(stop) and stop < start else 1
+    return [float(start) + verso * abs(float(step)) * k for k in range(quanti)]
+
+
+def _is_number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _iter_expr_texts(data: Any):
@@ -2133,3 +2215,386 @@ def _check_expr_nodes(bag: Bag, doc: Document, m: StudyModel) -> None:
             exprlang.eval_expr(text, scope)
         except ValueError as e:
             bag.add(p + ("expr",), str(e), code="expr", prefer_value=True)
+
+
+# ---------------------------------------------------------------------------
+# Il corredo e i due ruoli di una lista
+#
+# Port delle guardie di granulation-studies #47-#54. Sono quasi tutte statiche:
+# l'editor le da' mentre si scrive, dove il runtime le darebbe solo al load.
+# I messaggi sono portati alla lettera — due diagnostiche che dicono la stessa
+# cosa con parole diverse sono un bug di prodotto.
+
+_CORREDO_KEYS = frozenset({exprlang.CORREDO_KEY, exprlang.CYCLE_KEY})
+
+# Chiavi che marcano un generatore Y. Il vocabolario e' condiviso dalle due
+# famiglie di ruolo: dice **da dove vengono i numeri**, non come si leggono.
+_Y_GENERATOR_KEYS = frozenset({"values", "ramp", "base"})
+
+
+def _is_generator_node(v: Any) -> bool:
+    return isinstance(v, dict) and any(k in v for k in _Y_GENERATOR_KEYS)
+
+
+def _check_corredi(bag: Bag, doc: Document, m: StudyModel) -> None:
+    """I corredi, il wrapper di ruolo e i loro spostamenti."""
+    _check_let_corredi(bag, doc, ("let",), doc.get(("let",)), voce=False)
+    for nome, cfg in _streams_items(doc):
+        base = ("streams", nome)
+        _check_let_corredi(bag, doc, base + ("let",), cfg.get("let"), voce=False)
+        spread = cfg.get("spread")
+        if isinstance(spread, dict):
+            _check_let_corredi(bag, doc, base + ("spread", "let"),
+                               spread.get("let"), voce=True)
+    _check_linear_env_ruolo(bag, doc)
+    _check_corredi_mossi(bag, doc)
+    _check_corredi_consumo(bag, doc)
+
+
+def _streams_items(doc: Document):
+    streams = doc.get(("streams",))
+    if not isinstance(streams, dict):
+        return []
+    return [(k, v) for k, v in streams.items() if isinstance(v, dict)]
+
+
+def _check_let_corredi(bag: Bag, doc: Document, kp: KeyPath, blocco: Any,
+                       *, voce: bool) -> None:
+    """Le dichiarazioni di un blocco ``let:``: corredi, politica, ruolo."""
+    if not isinstance(blocco, dict):
+        return
+    for nome, val in blocco.items():
+        qui = kp + (nome,)
+        if exprlang.is_corredo(val):
+            if voce:
+                # A livello di voce ``i`` e' gia' fissato: una lista qui non
+                # avrebbe nessun indice da cui essere letta.
+                bag.add(qui,
+                        f"spread.let: '{nome}' dichiara un corredo — a livello "
+                        "di voce 'i' e' gia' fissato, quindi una lista qui non "
+                        "avrebbe nessun indice da cui essere letta.",
+                        code=codes.CORREDO, prefer_value=True)
+                continue
+            problema = _corredo_problema(nome, val)
+            if problema:
+                bag.add(qui, problema, code=codes.CORREDO, prefer_value=True)
+            continue
+        if isinstance(val, dict) and exprlang.CYCLE_KEY in val \
+                and not exprlang.is_expr_node(val):
+            bag.add(qui,
+                    f"let: '{nome}' dichiara 'cycle' senza 'list' — 'cycle' e' "
+                    "la politica di un corredo (accordo o pattern), non un "
+                    "valore a se'.",
+                    code=codes.CORREDO, prefer_value=True)
+            continue
+        if voce:
+            continue
+        # Famiglia 1 in posizione di Famiglia 2: in un ``let:`` la posizione
+        # non disambigua i due ruoli di una lista, quindi va marcato.
+        if _is_generator_node(val) and not exprlang.is_expr_node(val):
+            bag.add(qui, _migrazione_linear_env(val), code=codes.LINEAR_ENV_MIGRAZIONE,
+                    prefer_value=True)
+
+
+def _corredo_problema(nome: str, spec: Dict[str, Any]) -> Optional[str]:
+    """Il guaio di una dichiarazione ``{list: ...}``, o ``None`` se e' sana.
+
+    Un corredo **possiede la propria lunghezza**: passano solo le forme che
+    possiedono un conteggio. Le forme che il conteggio se lo fanno dare da
+    fuori sono le stesse che in ``spread.over`` lo ereditano; nel corredo non
+    c'e' nessun fuori.
+    """
+    extra = sorted(set(spec) - _CORREDO_KEYS)
+    if extra:
+        return (f"corredo '{nome}': chiavi non ammesse {extra} "
+                f"(solo {sorted(_CORREDO_KEYS)}).")
+    ciclo = spec.get(exprlang.CYCLE_KEY, False)
+    if not isinstance(ciclo, bool):
+        return (f"corredo '{nome}': 'cycle' vuole true o false "
+                f"(ricevuto {ciclo!r}).")
+    dentro = spec.get(exprlang.CORREDO_KEY)
+    if isinstance(dentro, dict):
+        return _corredo_generato_problema(nome, dentro)
+    if not isinstance(dentro, list):
+        return (f"corredo '{nome}': 'list' vuole una lista di valori o un "
+                "generatore che possieda il proprio conteggio.")
+    if not dentro:
+        return (f"corredo '{nome}': un corredo vuoto non ha niente da "
+                "indicizzare — toglilo, oppure dagli almeno un elemento.")
+    for k, v in enumerate(dentro):
+        if not _is_number(v):
+            return (f"corredo '{nome}': l'elemento {k} non e' un numero "
+                    f"({v!r}) — i corredi di sagome e di valori non numerici "
+                    "sono fuori dalla v1.")
+    return None
+
+
+def _corredo_generato_problema(nome: str, dentro: Dict[str, Any]) -> Optional[str]:
+    if exprlang.LINEAR_ENV_KEY in dentro:
+        return (f"corredo '{nome}': 'linear_env:' marca una forma nel tempo, "
+                "ma un corredo si legge per indice — dentro 'list' va il "
+                "generatore diretto (lista, 'values', 'ramp' o banda).")
+    if isinstance(dentro.get("values"), list):
+        return None
+    if "ramp" in dentro:
+        r = dentro["ramp"]
+        if not isinstance(r, dict):
+            return f"corredo '{nome}': 'ramp' vuole un dict {{start, stop, step}}."
+        manca = sorted({"start", "stop", "step"} - set(r))
+        if manca:
+            return (f"corredo '{nome}': il ramp non possiede il proprio "
+                    f"conteggio (manca {', '.join(manca)}) — un corredo "
+                    "possiede la propria lunghezza e non eredita 'n' da "
+                    "nessuno. Dichiara '{start, stop, step}', che ha la griglia.")
+        return None
+    if "base" in dentro:
+        if "n" not in dentro:
+            return (f"corredo '{nome}': la banda non possiede il proprio "
+                    "conteggio (manca 'n') — un corredo possiede la propria "
+                    "lunghezza e non eredita 'n' dallo spread. Per un "
+                    "pescaggio *per voce* usa la banda in 'spread.let'.")
+        return None
+    return (f"corredo '{nome}': dentro 'list' va una lista o un generatore "
+            "(values | ramp | banda).")
+
+
+def _migrazione_linear_env(spec: Dict[str, Any]) -> str:
+    """L'errore per un generatore nudo in posizione di Famiglia 2."""
+    marker = next(k for k in spec if k in _Y_GENERATOR_KEYS)
+    if marker == "values":
+        rimedio = "'{values: [...]}' -> '{linear_env: [...]}'"
+    elif marker == "ramp":
+        rimedio = "'{ramp: {...}}' -> '{linear_env: {ramp: {...}}}'"
+    else:
+        rimedio = ("'{n: .., base: .., range: ..}' -> "
+                   "'{linear_env: {n: .., base: .., range: ..}}'")
+    return (f"'{marker}:' qui si legge **per tempo** — i valori diventano i "
+            "breakpoint di un envelope su tempi equispaziati, non una serie "
+            f"letta per indice. Marca il ruolo con 'linear_env:'. {rimedio}.")
+
+
+def _check_corredi_mossi(bag: Bag, doc: Document) -> None:
+    """``versions:`` e ``percorso:`` muovono il **valore**, mai il tipo.
+
+    Uno stato che sostituisce un corredo deve fornire un corredo, e della
+    stessa politica di ``cycle``: altrimenti la validita' dello studio
+    cambierebbe da una versione all'altra, e un fuori range comparirebbe solo
+    in alcune combinazioni del prodotto cartesiano.
+    """
+    dichiarati = {
+        nome: val
+        for nome, val in (doc.get(("let",)) or {}).items()
+        if exprlang.is_corredo(val)
+    } if isinstance(doc.get(("let",)), dict) else {}
+    if not dichiarati:
+        return
+    _walk_versions(bag, doc.get(("versions",)), dichiarati, ("versions",))
+    percorso = doc.get(("percorso",))
+    if isinstance(percorso, dict):
+        for nome in percorso:
+            if nome in dichiarati and nome not in VERSIONS_RESERVED:
+                bag.add(("percorso", nome),
+                        f"percorso: '{nome}' e' dichiarato come corredo nel "
+                        "'let:' — una traiettoria e' una legge sul tempo, non "
+                        "una lista, e il tipo lo fissa la dichiarazione.",
+                        code=codes.CORREDO_MOSSO, prefer_value=True)
+
+
+def _walk_versions(bag: Bag, nodo: Any, dichiarati: Dict[str, Any],
+                   kp: KeyPath) -> None:
+    if not isinstance(nodo, dict):
+        return
+    for nome, val in nodo.items():
+        if len(kp) == 1 and nome in VERSIONS_RESERVED:
+            continue
+        qui = kp + (nome,)
+        if nome in dichiarati:
+            _check_sostituzione(bag, nome, dichiarati[nome], val, qui)
+            continue
+        _walk_versions(bag, val, dichiarati, qui)
+
+
+def _check_sostituzione(bag: Bag, nome: str, dichiarato: Any, mosso: Any,
+                        kp: KeyPath) -> None:
+    if not exprlang.is_corredo(mosso):
+        bag.add(kp,
+                f"versions: '{nome}' e' dichiarato come corredo nel 'let:', ma "
+                f"questo stato lo sostituisce con {mosso!r} — 'versions:' muove "
+                "il valore di una manopola, mai il suo tipo.",
+                code=codes.CORREDO_MOSSO, prefer_value=True)
+        return
+    if exprlang.is_cyclic(mosso) != exprlang.is_cyclic(dichiarato):
+        atteso = ("un pattern (cycle: true)" if exprlang.is_cyclic(dichiarato)
+                  else "un accordo")
+        bag.add(kp,
+                f"versions: '{nome}' e' dichiarato come {atteso} nel 'let:', "
+                "ma questo stato ne cambia la politica di 'cycle' — la "
+                "dichiarazione fissa il tipo, 'versions:' muove solo il valore.",
+                code=codes.CORREDO_MOSSO, prefer_value=True)
+
+
+def _check_corredi_consumo(bag: Bag, doc: Document) -> None:
+    """Il corredo sotto-consumato: **warning**, non errore.
+
+    Legittimo — si sta ascoltando un sottoinsieme dell'accordo — ma anche il
+    sintomo piu' comune di un refuso. Il rilievo e' per corredo, non per
+    gruppo, e riguarda solo i corredi che quel gruppo legge **per voce**: uno
+    letto col solo indice costante (``ratio[0]``, la fondamentale) non e'
+    sotto-consumato da nessun ``n``.
+
+    Gli indici davvero letti si **calcolano**, valutando l'espressione
+    dell'indice per ogni voce: dire «gli elementi da indice n» vale solo per
+    l'indice identita', e con ``ratio[i + 2]`` sarebbe esattamente rovesciato.
+    """
+    doc_let = doc.get(("let",))
+    doc_corredi = _corredi_di(doc_let)
+    for nome, cfg in _streams_items(doc):
+        spread = cfg.get("spread")
+        if not isinstance(spread, dict):
+            continue
+        visibili = {**doc_corredi, **_corredi_di(cfg.get("let"))}
+        if not visibili:
+            continue
+        n = _check_spread_n(Bag(doc), ("streams", nome, "spread"),
+                            spread.get("n"), _outer_knob_names(
+                                doc, ("streams", nome)))
+        if n is None:
+            continue
+        gruppo = _corredi_di(cfg.get("let"))
+        for var, corredo in visibili.items():
+            elems = exprlang.corredo_values(corredo)
+            if not isinstance(elems, list) or len(elems) <= n:
+                continue
+            fonti = _indici_di(spread, var)
+            if not any(_dipende_da_i(s) for s in fonti):
+                continue
+            kp = (("streams", nome, "let", var) if var in gruppo
+                  else ("let", var))
+            inutilizzati = _inutilizzati(fonti, corredo, n, doc, nome)
+            if inutilizzati is None:
+                coda = "il corredo non e' consumato tutto."
+            else:
+                coda = ("gli elementi agli indici %s non sono usati."
+                        % ", ".join(str(k) for k in inutilizzati))
+            bag.add(kp,
+                    f"il corredo '{var}' del gruppo '{nome}' ha {len(elems)} "
+                    f"elementi, ma lo spread genera {n} voci: {coda}",
+                    types.DiagnosticSeverity.Warning,
+                    code=codes.CORREDO_SOTTO_CONSUMATO, prefer_value=True)
+
+
+def _corredi_di(blocco: Any) -> Dict[str, Any]:
+    if not isinstance(blocco, dict):
+        return {}
+    return {
+        k: _corredo_binding(v)
+        for k, v in blocco.items()
+        if exprlang.is_corredo(v) and not _corredo_problema(k, v)
+    }
+
+
+def _indici_di(spread: Dict[str, Any], var: str) -> List[str]:
+    """I testi degli indici con cui lo spread legge ``var``."""
+    import ast as _ast
+
+    out: List[str] = []
+    for testo in _iter_expr_texts(spread):
+        try:
+            tree = _ast.parse(testo, mode="eval")
+        except SyntaxError:
+            continue
+        for node in _ast.walk(tree):
+            if (isinstance(node, _ast.Subscript)
+                    and isinstance(node.value, _ast.Name)
+                    and node.value.id == var):
+                out.append(_ast.unparse(node.slice))
+    return out
+
+
+def _dipende_da_i(sorgente: str) -> bool:
+    import ast as _ast
+
+    try:
+        tree = _ast.parse(sorgente, mode="eval")
+    except SyntaxError:
+        return False
+    return any(isinstance(x, _ast.Name) and x.id == "i" for x in _ast.walk(tree))
+
+
+def _inutilizzati(fonti: List[str], corredo: Dict[str, Any], n: int,
+                  doc: Document, stream: str) -> Optional[List[int]]:
+    """Gli indici che le ``n`` voci non toccano, o ``None`` se non e' decidibile.
+
+    Meglio tacere su *quali* elementi che affermare il falso.
+    """
+    elems = exprlang.corredo_values(corredo)
+    size = len(elems)
+    esterne = _outer_knob_names(doc, ("streams", stream))
+    letti: set = set()
+    for voce in range(n):
+        for sorgente in fonti:
+            try:
+                idx = exprlang.eval_expr(
+                    sorgente, {**esterne, "i": voce, "n": n})
+            except ValueError:
+                return None
+            if not _is_number(idx) or float(idx) != int(idx):
+                return None
+            idx = int(idx)
+            pos = (idx % size if exprlang.is_cyclic(corredo)
+                   else idx + size if idx < 0 else idx)
+            if not 0 <= pos < size:
+                return None
+            letti.add(pos)
+    return sorted(set(range(size)) - letti)
+
+
+# I posti in cui una lista si legge **per indice** (Famiglia 1): la posizione k
+# e' l'elemento k. Li' il wrapper di ruolo della Famiglia 2 non ha senso, e il
+# runtime lo rifiuta esplicitamente.
+def _check_linear_env_ruolo(bag: Bag, doc: Document) -> None:
+    """``linear_env:`` in posizione di Famiglia 1: il ruolo sbagliato.
+
+    Simmetrico a ``_migrazione_linear_env``. Senza questa guardia il wrapper
+    verrebbe letto come il nome di una manopola o come un generatore ignoto, e
+    l'errore uscirebbe piu' avanti e altrove.
+    """
+    def segnala(kp: KeyPath, dove: str) -> None:
+        bag.add(kp,
+                f"'linear_env:' marca una forma nel tempo (i valori diventano "
+                f"i breakpoint di un envelope), ma {dove} la lista si legge "
+                "**per indice** — la posizione k e' l'elemento k. Dichiara il "
+                "generatore direttamente: 'values', 'ramp' o una banda.",
+                code=codes.LINEAR_ENV_RUOLO, prefer_value=True)
+
+    axes = doc.get(("axes",))
+    if isinstance(axes, dict):
+        for nome, cfg in axes.items():
+            if nome not in AXES_RESERVED and isinstance(cfg, dict) \
+                    and exprlang.LINEAR_ENV_KEY in cfg:
+                segnala(("axes", nome, exprlang.LINEAR_ENV_KEY),
+                        f"sull'asse '{nome}'")
+
+    for nome, cfg in _streams_items(doc):
+        spread = cfg.get("spread")
+        if not isinstance(spread, dict):
+            continue
+        for path, strategy in expand_over_items(over_items(spread)).items():
+            if isinstance(strategy, dict) and exprlang.LINEAR_ENV_KEY in strategy:
+                segnala(("streams", nome, "spread", "over", path),
+                        f"in 'spread.over.{path}'")
+
+    versions = doc.get(("versions",))
+    if isinstance(versions, dict):
+        for asse, cfg in versions.items():
+            if asse in VERSIONS_RESERVED:
+                continue
+            if isinstance(cfg, dict) and exprlang.LINEAR_ENV_KEY in cfg:
+                segnala(("versions", asse), f"nell'asse di versions '{asse}'")
+                continue
+            if not isinstance(cfg, dict):
+                continue
+            for stato, val in cfg.items():
+                if isinstance(val, dict) and exprlang.LINEAR_ENV_KEY in val:
+                    segnala(("versions", asse, stato),
+                            f"nell'entry '{stato}' dell'asse '{asse}'")
