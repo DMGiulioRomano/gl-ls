@@ -121,6 +121,7 @@ def collect(doc: Document, m: StudyModel) -> List[types.Diagnostic]:
     _check_streams(bag, doc, m)
     _check_global_spread(bag, doc, m)
     _check_engine_block(bag, doc, m, ("base",))
+    _check_loop_unit(bag, doc)
     _check_let_blocks(bag, doc, m)
     _check_unknown_keys(bag, doc, m)
     _check_corredi(bag, doc, m)
@@ -1680,9 +1681,11 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
             bag.add(bpath + ("pitch", "value"),
                     "pitch.value e' ammesso solo con 'edo: N'.",
                     code="pitch-value")
+    _check_deviation_probability(bag, bpath, base)
     grain = base.get("grain")
     if isinstance(grain, dict):
         _check_window_value(bag, bpath + ("grain", "envelope"), grain.get("envelope"))
+        _check_read_direction(bag, bpath, grain)
         if "reverse" in grain and grain.get("reverse") is not None:
             bag.add(bpath + ("grain", "reverse"),
                     "grain.reverse: chiave presente vuota = reverse forzato; "
@@ -1717,6 +1720,7 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
                     code="grain-unit-duration")
     pointer = base.get("pointer")
     if isinstance(pointer, dict):
+        _check_loop_unit_value(bag, bpath, pointer)
         if "loop_end" in pointer and "loop_dur" in pointer:
             bag.add(bpath + ("pointer", "loop_dur"),
                     "loop_end e loop_dur sono mutuamente esclusivi "
@@ -1734,11 +1738,444 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
         parts = tuple(dotted.split("."))
         if parts[0] in ("onset", "duration") and len(parts) == 1:
             continue
+        # ``grain.read_direction`` ha un dominio (l'insieme {-1, +1}), non un
+        # intervallo: il controllo generico tacerebbe su 0 e su 0.3 — che i
+        # bounds ammettono — e parlerebbe una seconda volta su 5, dove
+        # ``_check_read_direction`` ha gia' detto la cosa piu' precisa. I
+        # bounds restano nel registro perche' li' li leggono assi e over.
+        if dotted == "grain.read_direction":
+            continue
         v = doc.get(bpath + parts)
         if v is None:
             continue
         _check_param_bounds(bag, bpath + parts, dotted, v, m,
                             grain_unit=grain_unit)
+
+
+# ---------------------------------------------------------------------------
+# Superficie engine PGE v7-v9: le chiavi che l'editor deve saper leggere
+
+
+def _generator_node(v: Any) -> bool:
+    """True se il valore non e' un envelope ma qualcosa che lo *produce*.
+
+    Un nodo-expr o un generatore dello studio diventa un envelope prima che
+    l'engine lo veda (``_resolve_expr_nodes``, la pipeline dello spread):
+    giudicarlo con le regole dell'engine significherebbe rifiutare uno YAML
+    che il runtime accetta.
+    """
+    if not isinstance(v, dict):
+        return False
+    return (exprlang.is_expr_node(v) or exprlang.is_corredo(v)
+            or exprlang.LINEAR_ENV_KEY in v
+            or any(mk in v for mk in ("values", "ramp", "base", "range", "expr")))
+
+
+# ---------------------------------------------------------------------------
+# ``deviation_probability``: la rinomina di PGE #204 e la stretta di v8
+
+
+def _looks_like_envelope(v: Any) -> bool:
+    """Specchio di ``Envelope.is_envelope_like``: cio' che l'engine legge come
+    envelope.
+
+    Un dict lo e' se ha ``points``; una lista se e' una forma compatta, un BP
+    group, o se contiene almeno un elemento che uno di quelli lo e' — un
+    breakpoint ``[t, v]``, un ``[t, v, type]``, un dict ``{t, v}``, un gruppo o
+    un ciclo. Una lista **vuota** non lo e', e nemmeno una lista di scalari:
+    sono le due scritture che da PGE v8 diventano un errore invece di ricadere
+    su ``AlwaysGate``.
+    """
+    if isinstance(v, dict):
+        return "points" in v
+    if not isinstance(v, (list, tuple)) or not v:
+        return False
+    if is_compact_env(v) or is_bp_group(v):
+        return True
+    for item in v:
+        if is_compact_env(item) or is_bp_group(item):
+            return True
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            return True
+        if (isinstance(item, (list, tuple)) and len(item) == 3
+                and _num(item[0]) is not None and _num(item[1]) is not None
+                and isinstance(item[2], str)):
+            return True
+        if isinstance(item, dict) and "t" in item and "v" in item:
+            return True
+    return False
+
+
+def _dp_body(bag: Bag, path: KeyPath, v: Any, dove: str) -> None:
+    """Un corpo che dev'essere una probabilita' o un envelope.
+
+    Da PGE v8 un corpo che non si costruisce come envelope e'
+    ``InvalidFieldValueError``; prima ricadeva su ``AlwaysGate``, cioe' il
+    100% dei grani — il gate piu' lontano da quanto scritto. Il controllo e'
+    la meta' **conservativa** di quello dell'engine: segnala solo i corpi che
+    non sono un envelope in nessuna lettura, e lascia al runtime quelli che lo
+    sembrano e non si costruiscono.
+    """
+    if v is None or v is False or isinstance(v, bool):
+        return
+    if _num(v) is not None or _generator_node(v):
+        return
+    if _looks_like_envelope(v):
+        return
+    bag.add(path,
+            f"{dove}: il corpo {v!r} non e' ne' una probabilita' (0-100) ne' "
+            "un envelope in una delle forme note (lista di breakpoint "
+            "[[t, v], ...], dict {points: ...}, BP group, forma compatta). Da "
+            "PGE v8 e' un errore: prima ricadeva su un gate al 100% dei "
+            "grani, l'opposto del silenzio che sembra chiedere.",
+            code="deviation-probability-corpo", prefer_value=True)
+
+
+def _check_deviation_probability(bag: Bag, bpath: KeyPath,
+                                 base: Dict[str, Any]) -> None:
+    """La chiave morta, la chiave vuota, e il corpo che non si costruisce.
+
+    ``dephase`` e' stata rinominata da PGE v7.0.0 (#204) **senza alias di
+    compatibilita'**: oggi l'engine non la legge e non se ne lamenta, quindi
+    lo stream perde in silenzio la probabilita' che si voleva dichiarare. E'
+    un errore, non un avviso di deprecazione: non e' una scrittura vecchia che
+    funziona ancora, e' una scrittura che non funziona piu'.
+    """
+    if "dephase" in base:
+        bag.add(bpath + ("dephase",),
+                "'dephase' e' stata rinominata 'deviation_probability' da PGE "
+                "v7.0.0 (#204), senza alias di compatibilita': l'engine non "
+                "legge piu' questa chiave e non se ne lamenta, quindi lo "
+                "stream perde in silenzio la probabilita' dichiarata qui.",
+                code="dephase-rinominata",
+                data={"fix": {"kind": "rename",
+                              "new": "deviation_probability"}})
+    if "deviation_probability" not in base:
+        return
+    dpath = bpath + ("deviation_probability",)
+    dp = base["deviation_probability"]
+    if dp is None:
+        # Scritta e lasciata vuota: e' la scrittura che piu' somiglia a «non
+        # voglio deviazione» e fa l'opposto. L'engine la documenta e non la
+        # segnala; gira, quindi warning e non errore.
+        bag.add(dpath,
+                "'deviation_probability' scritta e lasciata vuota non e' "
+                "'assente': e' la modalita' a jitter implicito, ~1% dei grani. "
+                "Per spegnere le deviazioni togli la chiave o scrivi 'false'; "
+                "per una probabilita' esplicita mettici un numero 0-100.",
+                types.DiagnosticSeverity.Warning,
+                code="deviation-probability-implicita")
+        return
+    if _generator_node(dp) or _looks_like_envelope(dp):
+        return
+    if isinstance(dp, dict):
+        # Forma per-parametro: ogni chiave porta il proprio corpo, e i nomi
+        # fuori dal vocabolario li segnala gia' _check_unknown_keys.
+        for key, val in dp.items():
+            _dp_body(bag, dpath + (key,), val,
+                     f"deviation_probability.{key}")
+        return
+    _dp_body(bag, dpath, dp, "deviation_probability")
+
+
+# ---------------------------------------------------------------------------
+# ``grain.read_direction``: il verso di lettura interno al grano (PGE #207)
+
+
+def _rd_value(bag: Bag, path: KeyPath, v: Any) -> None:
+    """Un valore dichiarato — scalare o Y di un breakpoint — vale -1 o +1.
+
+    Non c'e' arrotondamento al segno: accettare una scrittura e renderizzarne
+    un'altra e' peggio del rifiuto, e lo 0 non ha una risposta non arbitraria.
+    ``true`` non e' ``+1``, benche' in Python ``True == 1``.
+    """
+    n = None if isinstance(v, bool) else _num(v)
+    if n is not None and n in EI.READ_DIRECTION_VALUES:
+        return
+    bag.add(path,
+            f"grain.read_direction: valore {v!r} non ammesso — il verso ha due "
+            "stati, -1 (indietro) e +1 (avanti). Lo 0 non ha un segno e un "
+            "valore intermedio non e' un verso: niente arrotondamento al "
+            "segno. Per il verso che segue la testina, ometti la chiave "
+            "(modalita' 'auto').",
+            code="read-direction-valore", prefer_value=True)
+
+
+def _rd_interp(bag: Bag, path: KeyPath, interp: Any) -> None:
+    """Un interp dichiarato — dovunque sia dichiarato — vale ``step``."""
+    if interp is None or interp == EI.READ_DIRECTION_INTERP:
+        return
+    bag.add(path,
+            f"grain.read_direction: interpolazione '{interp}' non ammessa. "
+            "Il verso ha due stati, non una rampa fra i due: 'step' e' gia' "
+            "implicito (l'envelope si scrive come una spezzata qualsiasi) ed "
+            "e' l'unico tipo dichiarabile.",
+            code="read-direction-interp", prefer_value=True)
+
+
+def _rd_points(bag: Bag, path: KeyPath, points: Any) -> None:
+    """Una lista di elementi envelope, qualunque forma abbiano."""
+    if not isinstance(points, (list, tuple)):
+        return
+    for i, item in enumerate(points):
+        _rd_item(bag, path + (i,), item)
+
+
+def _rd_item(bag: Bag, path: KeyPath, item: Any) -> None:
+    if is_compact_env(item) or has_compact_frame(item):
+        _rd_compact(bag, path, item)
+        return
+    if looks_like_bp_group(item):
+        _rd_group(bag, path, item)
+        return
+    if isinstance(item, dict):
+        if _generator_node(item):
+            return
+        if "v" in item:                      # breakpoint dict {t, v, type?}
+            _rd_interp(bag, path, item.get("type"))
+            _rd_value(bag, path, item["v"])
+        return
+    if isinstance(item, (list, tuple)) and len(item) in (2, 3):
+        # ``[t, v]`` e ``[t, v, type]``: il tag per-punto governa il segmento
+        # uscente ed e' soggetto alla stessa regola dell'interp globale.
+        if len(item) == 3:
+            _rd_interp(bag, path + (2,), item[2])
+        _rd_value(bag, path + (1,), item[1])
+
+
+def _rd_group(bag: Bag, path: KeyPath, group: Any) -> None:
+    """BP group ``[points, interp]``: l'interp e' quello della macrozona."""
+    _rd_interp(bag, path + (1,), group[1])
+    _rd_points(bag, path + (0,), group[0])
+
+
+def _rd_compact(bag: Bag, path: KeyPath, compact: Any) -> None:
+    """Forma compatta: l'interp e' il quarto posizionale, i valori nel pattern."""
+    if len(compact) > 3:
+        _rd_interp(bag, path + (3,), compact[3])
+    _rd_points(bag, path + (0,), compact[0])
+
+
+def _check_read_direction(bag: Bag, bpath: KeyPath, grain: Dict[str, Any]) -> None:
+    """Le tre regole che scendono dalla natura della chiave (PGE #207).
+
+    Il dominio e' l'**insieme** {-1, +1}, ``step`` e' l'interpolazione imposta
+    e implicita, e la chiave e' **alternativa** a ``grain.reverse``. L'engine
+    le fa rispettare sempre come errore esplicito, mai come correzione
+    silenziosa: qui si dicono un passo prima, mentre si scrive.
+    """
+    if "read_direction" not in grain:
+        return
+    rpath = bpath + ("grain", "read_direction")
+    if "reverse" in grain:
+        bag.add(rpath,
+                "grain.read_direction e grain.reverse governano la stessa "
+                "grandezza con semantiche opposte: insieme sono un errore, "
+                "non una priorita'. Tieni read_direction (-1 indietro, +1 "
+                "avanti) oppure reverse, e per il verso che segue "
+                "pointer.speed_ratio toglile entrambe.",
+                code="read-direction-coppia")
+    raw = grain["read_direction"]
+    if raw is None or _generator_node(raw):
+        return
+    if isinstance(raw, dict):
+        _rd_interp(bag, rpath + ("type",), raw.get("type"))
+        _rd_points(bag, rpath + ("points",), raw.get("points"))
+        return
+    if isinstance(raw, (list, tuple)):
+        if is_compact_env(raw) or has_compact_frame(raw):
+            _rd_compact(bag, rpath, raw)
+        elif looks_like_bp_group(raw):
+            _rd_group(bag, rpath, raw)
+        else:
+            _rd_points(bag, rpath, raw)
+        return
+    _rd_value(bag, rpath, raw)
+
+
+# ---------------------------------------------------------------------------
+# ``pointer.loop_unit``: vocabolario chiuso e migrazione PGE v9 (engine #222)
+
+
+def _check_loop_unit_value(bag: Bag, bpath: KeyPath, pointer: Dict[str, Any]) -> None:
+    """Il valore di ``loop_unit``, quando la chiave e' scritta.
+
+    Il vocabolario e' chiuso — ``seconds`` | ``absolute`` | ``normalized`` — e
+    fuori di li' l'engine alza ``InvalidFieldValueError``
+    (``PointerController._pre_normalize_loop_params``). Prima di PGE v9 «tutto
+    cio' che non e' normalized» valeva assoluto, quindi ``normalised``,
+    ``Normalized`` e ``loop_unite`` passavano muti: e' il refuso che questa
+    regola esiste per nominare.
+
+    La chiave **scritta e lasciata vuota** e' il secondo caso, e ha un rimedio
+    diverso: era falsy, quindi ereditarieta' da ``time_mode``; ora e' un valore
+    fuori vocabolario come un altro, ma chi l'ha scritta voleva dire
+    ``normalized``.
+    """
+    if "loop_unit" not in pointer:
+        return
+    unit = pointer["loop_unit"]
+    lpath = bpath + ("pointer", "loop_unit")
+    vocabolario = " | ".join(EI.LOOP_UNITS)
+    if unit is None:
+        bag.add(lpath,
+                "loop_unit scritta e lasciata vuota: da PGE v9 non e' piu' "
+                "'eredita da time_mode', e' un valore fuori vocabolario "
+                f"({vocabolario}). Per la lettura di prima scrivi "
+                "'loop_unit: normalized'.",
+                code="loop-unit-vuota",
+                data={"fix": {"kind": "fill-value", "new": "normalized",
+                              "path": list(lpath)}})
+        return
+    if unit in EI.LOOP_UNITS:
+        return
+    sug = _suggest(str(unit), EI.LOOP_UNITS)
+    extra = f" Forse '{sug}'?" if sug else ""
+    bag.add(lpath,
+            f"loop_unit '{unit}' non ammessa ({vocabolario}).{extra} Prima di "
+            "PGE v9 tutto cio' che non era 'normalized' valeva assoluto, "
+            "quindi un refuso passava muto: ora e' un errore.",
+            code="loop-unit-sconosciuta", prefer_value=True,
+            data={"fix": {"kind": "rename-value", "new": sug}} if sug else None)
+
+
+def _loop_unit_moves(value: Any) -> bool:
+    """True se leggere il valore in secondi invece che come frazione lo sposta.
+
+    Specchio di ``_rescaling_would_change`` nel ``PointerController`` (e del
+    gemello in granstudies): uno zero e' zero sotto qualunque fattore di scala,
+    e senza quel filtro il rilievo cadrebbe su ogni stream che scrive
+    ``start: 0`` — la forma piu' comune del corpus. Envelope, blocchi compatti
+    e generatori non si valutano: qui non si calcola, si avvisa.
+    """
+    if value is None or isinstance(value, bool):
+        return False
+    n = _num(value)
+    if n is not None:
+        return n != 0
+    return isinstance(value, (list, dict))
+
+
+_POINTER_DOTTED = "base.pointer."
+
+
+def _dotted_positions(node: Any) -> frozenset:
+    """Le posizioni raggiunte da una chiave puntata ``base.pointer.<k>``.
+
+    La posizione non e' sempre scritta dentro un blocco ``pointer:``: puo'
+    arrivare da ``spread.over``, da ``versions:`` o da ``percorso:``, che la
+    nominano col path puntato. Cercarla ovunque costa una visita e copre le tre
+    forme senza conoscerle una per una.
+
+    Un segmento in coda al nome della posizione e' ammesso — la grafia
+    ``base.pointer.start.values`` del corpus, dove il marcatore del generatore
+    e' appeso al path. Il gemello runtime pretende invece che la coda sia
+    *esattamente* la posizione, quindi qui la copertura e' un soprainsieme:
+    nella direzione sicura, perche' quei valori l'engine li legge davvero in
+    secondi.
+    """
+    found: set = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str) and key.startswith(_POINTER_DOTTED):
+                coda = key[len(_POINTER_DOTTED):]
+                if coda.split(".")[0] in EI.LOOP_UNIT_SCOPE:
+                    found.add(coda.split(".")[0])
+            found |= _dotted_positions(value)
+    elif isinstance(node, (list, tuple)):
+        for value in node:
+            found |= _dotted_positions(value)
+    return frozenset(found)
+
+
+def _check_loop_unit(bag: Bag, doc: Document) -> None:
+    """Le posizioni nel sample lasciate senza unita' sotto ``normalized``.
+
+    Da PGE v9 (engine #222) ``pointer.loop_unit`` **non eredita** piu' da
+    ``time_mode``: assente vale ``seconds``. Uno stream ``normalized`` che
+    dichiara una posizione senza ``loop_unit`` non e' un errore — l'engine non
+    ferma niente — ma con ogni probabilita' dice un numero diverso da quello
+    che chi l'ha scritto intendeva: ``0.3`` era il 30% del sample, ora sono 0.3
+    secondi. Il sintomo classico da warning.
+
+    E' il gemello in editor di ``granstudies.diagnostics.check_loop_unit`` (e
+    dell'avviso ``[LOOP_UNIT]`` che l'engine stampa a render time): stesso
+    codice, ``codes.LOOP_UNIT_IMPLICITO``, perche' e' la stessa diagnostica
+    detta prima — quella dell'engine arriva in mezzo al log di uno sweep da
+    trenta varianti, questa mentre lo study si scrive.
+
+    Si guarda il ``pointer`` **efficace** di ogni stream (base di documento
+    merged con l'override), che e' anche l'unico modo di vedere il caso di
+    ``studies/stack``: ``loop_unit`` nel base, la sola ``start`` nello stream.
+    Si rileva sul pointer merged e si attribuisce sull'override, cosi' uno
+    stream che riporta a zero una posizione del base non eredita un rilievo che
+    non gli appartiene, e un difetto del base non si moltiplica per gli stream
+    che lo ereditano.
+
+    Limite accettato, come nel runtime: un ``loop_unit`` scritto per path
+    puntato non viene visto e produce un falso positivo. E' la direzione
+    sicura, e la forma non esiste nel corpus — ``loop_unit`` e' un
+    meta-parametro, non un asse.
+    """
+    data = doc.data
+    if not isinstance(data, dict):
+        return
+    base = data.get("base") if isinstance(data.get("base"), dict) else {}
+    base_ptr = base.get("pointer") if isinstance(base.get("pointer"), dict) else {}
+    streams = data.get("streams") if isinstance(data.get("streams"), dict) else {}
+    # Le posizioni dichiarate fuori dagli stream (spread globale, versions,
+    # percorso) valgono per tutti, come il base.
+    puntate_doc = _dotted_positions(
+        {k: v for k, v in data.items() if k != "streams"})
+    # ``streams:`` assente = un solo stream, quello del base (resolve_streams).
+    voci = list(streams.items()) or [(None, {})]
+    visti: set = set()
+    for name, entry in voci:
+        entry = entry if isinstance(entry, dict) else {}
+        override = entry.get("base") if isinstance(entry.get("base"), dict) else {}
+        ov_ptr = (override.get("pointer")
+                  if isinstance(override.get("pointer"), dict) else {})
+        if override.get("time_mode", base.get("time_mode")) != "normalized":
+            continue
+        pointer = {**base_ptr, **ov_ptr}
+        if "loop_unit" in pointer:
+            continue   # dichiarata: valida o no, lo dice _check_loop_unit_value
+        puntate_entry = _dotted_positions(entry)
+        chiavi = {k for k in EI.LOOP_UNIT_SCOPE
+                  if _loop_unit_moves(pointer.get(k))} | puntate_doc | puntate_entry
+        if not chiavi:
+            continue
+        proprie = {k for k in chiavi if k in ov_ptr} | puntate_entry
+        site: KeyPath = (("streams", name, "base", "pointer")
+                         if proprie and name is not None else ("base", "pointer"))
+        if site in visti:
+            continue
+        visti.add(site)
+        quali = ", ".join(sorted(chiavi))
+        bag.add(_loop_unit_anchor(doc, site),
+                f"'pointer' dichiara {quali} sotto 'time_mode: normalized' "
+                "senza 'loop_unit': da PGE v9 quei valori sono letti in "
+                "secondi assoluti, non come frazione della durata del sample. "
+                "Aggiungi 'loop_unit: normalized' per la lettura di prima, "
+                "'loop_unit: seconds' per confermare i secondi.",
+                types.DiagnosticSeverity.Warning,
+                code=codes.LOOP_UNIT_IMPLICITO,
+                data={"fix": {"kind": "add-loop-unit", "path": list(site)}}
+                if isinstance(doc.get(site), dict) and doc.get(site) else None)
+
+
+def _loop_unit_anchor(doc: Document, site: KeyPath) -> KeyPath:
+    """Dove appendere il rilievo: il blocco ``pointer:`` se esiste.
+
+    Puo' non esistere: con la posizione scritta per path puntato non c'e'
+    nessun ``pointer:`` da segnare, e ripiegare sul ``base:`` che la ospita
+    dice comunque *di chi* e' il rilievo (l'ultimo ripiego, la riga 0, sarebbe
+    un rilievo senza casa).
+    """
+    for kp in (site, site[:-1], ("base",)):
+        if doc.entry(kp) is not None:
+            return kp
+    return site
 
 
 def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
@@ -1875,6 +2312,12 @@ def _check_unknown_keys(bag: Bag, doc: Document, m: StudyModel) -> None:
                     _, _, amb = EI.split_axis_key(key, axis_names)
                     if amb is not None:
                         _report_ambiguous_axis(bag, entry.path + (key,), key, amb)
+        # ``deviation_probability`` e' due cose in una: un envelope globale
+        # (``{points: ...}``, o un generatore che lo produce) e la forma
+        # per-parametro. Solo la seconda ha un vocabolario chiuso.
+        if ctx == "deviation_probability" and (
+                "points" in value or _generator_node(value)):
+            continue
         if ctx not in schema.CLOSED_CONTEXTS:
             continue
         allowed = [k.name for k in schema.keys_for(ctx)]

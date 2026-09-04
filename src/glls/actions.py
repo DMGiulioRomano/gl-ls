@@ -341,6 +341,11 @@ def quickfixes(doc: Document, uri: str,
             out.append(_action(f"Sostituisci con '{fix['new']}'", uri,
                                [types.TextEdit(range=diag.range, new_text=str(fix["new"]))],
                                types.CodeActionKind.QuickFix, [diag]))
+        elif kind == "fill-value" and fix.get("new"):
+            action = _fill_value_action(doc, uri, tuple(fix.get("path") or ()),
+                                        str(fix["new"]), diag)
+            if action:
+                out.append(action)
         elif kind == "clear-value":
             out.append(_action("Rendi la chiave presente-vuota", uri,
                                [types.TextEdit(range=diag.range, new_text="")],
@@ -376,6 +381,19 @@ def quickfixes(doc: Document, uri: str,
                                        "Aggiungi 'baseline'", diag)
             if action:
                 out.append(action)
+        elif kind == "add-loop-unit":
+            path = tuple(fix.get("path") or ())
+            # Due azioni, non una: quale sia l'unita' giusta lo sa solo chi ha
+            # scritto il numero. ``normalized`` riporta alla lettura di prima
+            # di PGE v9, ``seconds`` conferma che i valori erano gia' secondi.
+            for unit in EI.LOOP_UNITS:
+                if unit == "absolute":
+                    continue   # alias storico: non e' una scelta da offrire
+                action = _insert_first_key(
+                    doc, uri, path, f"loop_unit: {unit}",
+                    f"Dichiara 'loop_unit: {unit}' nel blocco pointer", diag)
+                if action:
+                    out.append(action)
         elif kind == "add-base-duration":
             out.extend(_add_base_duration_actions(doc, uri, diag))
         elif kind == "move-duration":
@@ -465,9 +483,41 @@ def _move_duration_actions(doc: Document, uri: str, diag: types.Diagnostic,
     return out
 
 
+def _fill_value_action(doc: Document, uri: str, path: KeyPath, new: str,
+                       diag: types.Diagnostic) -> Optional[types.CodeAction]:
+    """Il valore di una chiave scritta e lasciata vuota.
+
+    Non e' un ``rename-value``: li' la diagnostica sta sulla **chiave** (un
+    valore vuoto non ha uno span su cui puntare), e sostituire il testo del
+    range rinominerebbe la chiave invece di darle un valore. Si scrive dopo i
+    due punti, che e' anche l'unico posto che non disturba un commento a fine
+    riga."""
+    entry = doc.entry(path)
+    if entry is None or entry.key_span is None:
+        return None
+    ks = entry.key_span
+    righe = doc.text.splitlines()
+    if ks.start_line >= len(righe):
+        return None
+    col = righe[ks.start_line].find(":", ks.end_col)
+    if col < 0:
+        return None
+    return _action(f"Scrivi '{path[-1]}: {new}'", uri,
+                   [_insert(ks.start_line, col + 1, f" {new}")],
+                   types.CodeActionKind.QuickFix, [diag])
+
+
 def _insert_first_key(doc: Document, uri: str, path: KeyPath, text: str,
                       title: str, diag: types.Diagnostic
                       ) -> Optional[types.CodeAction]:
+    """Una chiave in piu', scritta come prima riga di un blocco.
+
+    L'inserimento e' una riga intera all'indentazione della prima chiave del
+    blocco, quindi vale solo per un **blocco mapping**: nella forma flow
+    (``pointer: {start: 0.3}``) la prima chiave sta sulla riga del blocco
+    stesso, e la riga nuova finirebbe *sopra* di esso — fuori dal blocco che
+    doveva riceverla, con l'indentazione di una chiave figlia. Li' e' meglio
+    nessun fix che un fix che rompe il documento."""
     entry = doc.entry(path)
     if entry is None:
         return None
@@ -476,6 +526,9 @@ def _insert_first_key(doc: Document, uri: str, path: KeyPath, text: str,
         first_child = doc.entry(path + (next(iter(value)),))
         if first_child is not None and first_child.key_span is not None:
             ks = first_child.key_span
+            if (entry.key_span is not None
+                    and ks.start_line == entry.key_span.start_line):
+                return None      # forma flow: niente riga su cui appendersi
             return _action(title, uri,
                            [_insert(ks.start_line, 0,
                                     " " * ks.start_col + text + "\n")],

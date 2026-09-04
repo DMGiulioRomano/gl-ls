@@ -87,6 +87,38 @@ Tre strati, tutti puri e testabili senza LSP:
   segnala i codici nuovi non ancora dichiarati. In CI quella verifica si salta:
   e' precisamente il punto: la dipendenza non c'e'.
 
+- **La superficie engine e' un versionato, non una foto** (PGE v7-v9). Fra la
+  v7.0.0 e la v9.0.2 quattro cose che gl-ls valida hanno cambiato significato,
+  e ognuna ha lasciato una regola con una forma diversa:
+  - `pointer.loop_unit` **non eredita piu'** da `time_mode` (engine #222). Il
+    cambiamento e' silenzioso — nessun errore, suono diverso — quindi la
+    regola e' un **warning col codice condiviso** `loop-unit-implicito`: lo
+    stesso che `granstudies.diagnostics.check_loop_unit` emette al load e che
+    l'engine stampa a render time. Dei tre, questo e' l'unico che arriva prima
+    dell'ascolto. Si guarda il `pointer` **efficace** (base merged con
+    l'override) e si attribuisce sull'override, cosi' il difetto di un base non
+    si moltiplica per gli stream che lo ereditano e uno stream che azzera una
+    posizione non eredita un rilievo che non gli appartiene;
+  - `grain.read_direction` ha un **dominio**, l'insieme `{-1, +1}`, non un
+    intervallo. I bounds `[-1, 1]` restano nel registro di `engine_info` —
+    li' li leggono assi e `spread.over` — ma il controllo del blocco engine li
+    salta: il generico tacerebbe su `0` e su `0.3`, che i bounds ammettono, e
+    parlerebbe una seconda volta su `5`, dove la regola del dominio ha gia'
+    detto la cosa piu' precisa;
+  - `deviation_probability` accetta corpi che il runtime costruisce e corpi che
+    rifiuta, e distinguerli del tutto vorrebbe dire portarsi in casa
+    `EnvelopeBuilder`. La regola e' quindi la **meta' conservativa**: segnala
+    solo i corpi che non sono un envelope in nessuna lettura (lista vuota,
+    lista di scalari, stringa), e lascia al runtime quelli che lo sembrano e
+    non si costruiscono. Un generatore dello studio (`{expr: ...}`, banda,
+    `values`) non si giudica affatto: diventa un envelope prima che l'engine lo
+    veda;
+  - `onset` e `duration` sono **opzionali** per l'engine (PGE #220 e #205): le
+    condizioni di esistenza di uno stream restano due, `stream_id` e `sample`.
+    Lo `stack:` degli studi pretende comunque una durata, ed e' una regola
+    dello studio, non dell'engine — le fasi si misurano sul tempo dello stream,
+    non su quello del file audio.
+
 ## Limiti noti
 
 - La conversione unit non tratta i nodi generatore annidati dentro
@@ -98,6 +130,15 @@ Tre strati, tutti puri e testabili senza LSP:
   (servirebbe leggere il file audio). Da PGE v5.1.0 `pge.api.parameter_bounds()`
   li espone gia' risolti: chiuderebbe il drift della tabella di `engine_info`,
   al prezzo della scelta standalone.
+- Un `loop_unit` scritto per **path puntato** (`base.pointer.loop_unit` in
+  `spread.over`/`versions:`) non viene visto dal rilievo sulla migrazione, che
+  quindi darebbe un falso positivo. E' il limite del gemello runtime, accettato
+  per la stessa ragione: la forma non esiste nel corpus, `loop_unit` e' un
+  meta-parametro e non un asse. Sulle **posizioni** scritte per path puntato la
+  copertura e' invece un soprainsieme di quella del runtime — vale anche la
+  grafia `base.pointer.start.values`, col marcatore del generatore in coda al
+  path — e in direzione sicura: quei valori l'engine li legge davvero in
+  secondi.
 - La superficie posizionale degli envelope engine (forma compatta a cicli, BP
   group `[points, interp]`) si valida per *forma*, non per grammatica: i
   predicati sono quelli ufficiali della disambiguazione — cornice a 3-6

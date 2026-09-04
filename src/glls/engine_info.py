@@ -60,6 +60,11 @@ PARAMS: Dict[str, ParamInfo] = {
     "grain.duration_range": ParamInfo(0, 10, None, "±s",
         "Randomizzazione ± della durata per grano, nell'unita' di "
         "`grain.duration_unit`."),
+    "grain.read_direction": ParamInfo(-1, 1, None, "verso",
+        "Verso di lettura INTERNO al grano (PGE #207): -1 indietro, +1 "
+        "avanti. Il dominio e' l'insieme {-1, +1}, non l'intervallo: lo 0 non "
+        "ha un segno e viene rifiutato al parse. Chiave assente = modalita' "
+        "'auto', il verso segue il segno di `pointer.speed_ratio`."),
     "volume": ParamInfo(-120, VOLUME_MAX_DB, 0.0, "dB",
         "Volume dello stream. Sopra 0 dBFS il renderer non normalizza: il "
         "range positivo e' clipping reale, non headroom."),
@@ -72,14 +77,19 @@ PARAMS: Dict[str, ParamInfo] = {
     "pitch.eighth_tone": ParamInfo(-144, 144, 0.0, "ottavi di tono", "48-EDO."),
     "pitch.cents": ParamInfo(-3600, 3600, 0.0, "cents", "1200-EDO."),
     "pointer.start": ParamInfo(0, None, 0.0, "s",
-        "Posizione iniziale di lettura nel sample."),
+        "Posizione iniziale di lettura nel sample, nell'unita' di "
+        "`pointer.loop_unit` (default `seconds`: da PGE v9 non eredita da "
+        "`time_mode`)."),
     "pointer.speed_ratio": ParamInfo(-100, 100, 1.0, "ratio",
         "Velocita' di lettura: 1 normale, -1 indietro, 0 fermo."),
     "pointer.offset_range": ParamInfo(-1, 1, 0.0, "frazione",
         "Deviazione per-grano, scalata e confinata alla finestra di loop."),
-    "pointer.loop_start": ParamInfo(0, None, None, "s", "Inizio loop."),
-    "pointer.loop_end": ParamInfo(0, None, None, "s", "Fine loop (priorita' su loop_dur)."),
-    "pointer.loop_dur": ParamInfo(0.005, None, None, "s", "Durata loop."),
+    "pointer.loop_start": ParamInfo(0, None, None, "s",
+        "Inizio loop, nell'unita' di `pointer.loop_unit`."),
+    "pointer.loop_end": ParamInfo(0, None, None, "s",
+        "Fine loop (priorita' su loop_dur), nell'unita' di `pointer.loop_unit`."),
+    "pointer.loop_dur": ParamInfo(0.005, None, None, "s",
+        "Durata loop, nell'unita' di `pointer.loop_unit`."),
     "voices.num_voices": ParamInfo(1, 256, 1, "voci", "Numero di voci."),
     "voices.scatter": ParamInfo(0, 1, 0.0, "0..1",
         "0 = voci sincrone sullo stesso IOT, 1 = IOT indipendenti."),
@@ -149,6 +159,58 @@ CLIP_STRATEGIES = ["overflow_margin", "passthrough"]
 DURATION_UNITS = ["seconds", "samples", "milliseconds"]
 
 MS_PER_SECOND = 1000.0
+
+# ---------------------------------------------------------------------------
+# Posizioni nel sample: ``pointer.loop_unit`` (engine #222, PGE v9).
+
+# Vocabolario chiuso di ``pointer.loop_unit``
+# (``pge.controllers.pointer_controller.LOOP_UNITS``, granstudies
+# ``bounds.LOOP_UNITS``). ``seconds`` e' la grafia canonica — allinea
+# ``loop_unit`` a ``grain.duration_unit`` — e ``absolute`` l'alias storico:
+# stessa lettura, valori gia' in secondi assoluti. Fuori di qui l'engine alza
+# ``InvalidFieldValueError``: prima «tutto cio' che non e' normalized» valeva
+# assoluto, e un refuso passava muto.
+LOOP_UNITS = ["seconds", "absolute", "normalized"]
+
+# L'unita' che vale quando ``loop_unit`` e' assente. Da PGE v9 **non** eredita
+# piu' da ``time_mode`` (granstudies ``bounds.LOOP_UNIT_DEFAULT``): le due
+# chiavi governano assi diversi con riferimenti diversi — ``time_mode`` scala
+# l'asse X (tempo) degli envelope sulla duration dello stream, ``loop_unit``
+# l'asse Y (valore) sulla durata del file audio.
+LOOP_UNIT_DEFAULT = "seconds"
+
+# Le chiavi del blocco pointer che ``loop_unit`` interpreta
+# (``_LOOP_UNIT_SCOPE`` del PointerController, granstudies
+# ``diagnostics.LOOP_UNIT_SCOPE``). ``start`` e' fra queste benche' loop non
+# sia: e' una posizione nel sample come ``loop_start``, stesso dominio e
+# stessa unita'.
+LOOP_UNIT_SCOPE = ("start", "loop_start", "loop_end", "loop_dur")
+
+# ---------------------------------------------------------------------------
+# Verso di lettura del grano: ``grain.read_direction`` (PGE #207).
+
+# I due soli valori dichiarabili (``READ_DIRECTION_VALUES`` dell'engine): un
+# insieme, non un intervallo. Arrotondare al segno significherebbe accettare
+# una scrittura e renderizzarne un'altra, e lo 0 non ha una risposta non
+# arbitraria.
+READ_DIRECTION_VALUES = (-1.0, 1.0)
+
+# L'unica interpolazione ammessa, e quella imposta dalla chiave
+# (``REQUIRED_INTERP``): il verso ha due stati, non una rampa fra i due.
+READ_DIRECTION_INTERP = "step"
+
+# ---------------------------------------------------------------------------
+# ``deviation_probability``: le chiavi della forma per-parametro.
+
+# I ``deviation_probability_key`` dichiarati nel registry dell'engine
+# (``parameters/parameter_schema.py`` piu' ``pitch`` dal PitchController).
+# ``reverse`` e ``read_direction`` sono due chiavi distinte: la prima e' la
+# probabilita' di ribaltare ``grain.reverse``, la seconda quella di ribaltare
+# il verso dichiarato con ``grain.read_direction``.
+DEVIATION_PROBABILITY_KEYS = [
+    "volume", "pan", "duration", "envelope", "reverse", "read_direction",
+    "pointer", "pitch",
+]
 
 # Nome dei valori attesi per ogni unita', per i messaggi di diagnostica
 # (granstudies ``study_spec._UNIT_LABELS``).

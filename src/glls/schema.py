@@ -241,6 +241,78 @@ BP_GROUP_DOC = (
     "primo lista di punti e il secondo stringa (un breakpoint `[t, v]` ha il "
     "primo numerico, un loop block ha 3-6 elementi)."
 )
+# ``deviation_probability`` (PGE #204: si chiamava ``dephase``). La doc dice
+# subito la trappola, perche' e' la scrittura che piu' somiglia a «non voglio
+# deviazione» e fa l'opposto.
+DEVIATION_PROBABILITY_DOC = (
+    "**Probabilita' per-grano di applicare le deviazioni** (`_range` e "
+    "compagnia). Cinque scritture, tre delle quali si somigliano e non "
+    "significano la stessa cosa:\n\n"
+    "| Scrittura | Cosa fa |\n"
+    "|---|---|\n"
+    "| assente | i `_range` dichiarati sono sempre attivi |\n"
+    "| `false` | idem: nessuna probabilita', solo i range espliciti |\n"
+    "| **scritta e lasciata vuota** (`null`) | **jitter implicito**, ~1% dei "
+    "grani — non e' «assente» |\n"
+    "| `0-100` | probabilita' globale |\n"
+    "| envelope | probabilita' che varia nel tempo |\n"
+    "| `{<chiave>: ...}` | per-parametro: volume, pan, duration, envelope, "
+    "reverse, read_direction, pointer, pitch |\n\n"
+    "Da PGE v8 un corpo che **non si costruisce come envelope** (lista vuota, "
+    "lista di non-breakpoint, dict che non e' ne' envelope ne' per-parametro) "
+    "e' un `InvalidFieldValueError`: prima ricadeva su `AlwaysGate`, cioe' il "
+    "100% dei grani — il gate piu' lontano da quanto scritto."
+)
+# ``dephase``: rinominata da PGE #204 **senza alias di compatibilita'**, quindi
+# oggi la chiave non e' un sinonimo — e' una chiave che nessuno legge.
+DEPHASE_DEPRECATED_DOC = (
+    "**Chiave morta.** Rinominata `deviation_probability` da PGE v7.0.0 "
+    "(#204) **senza alias di compatibilita'**: l'engine non la legge piu' e "
+    "non se ne lamenta, quindi lo stream perde in silenzio la probabilita' "
+    "che si voleva dichiarare. Quick fix disponibile: rinominala.\n\n"
+    + DEVIATION_PROBABILITY_DOC
+)
+# ``pointer.loop_unit`` (engine #222, PGE v9): il pezzo che sorprende non e' il
+# vocabolario ma la fine dell'ereditarieta', quindi la doc la dice per prima.
+LOOP_UNIT_DOC = (
+    "**Unita' delle posizioni nel sample** — governa `start`, `loop_start`, "
+    "`loop_end` e `loop_dur`, che sono tutte posizioni nello stesso dominio.\n\n"
+    "- `seconds` (default, grafia canonica) · `absolute` (alias storico): i "
+    "valori sono gia' in secondi;\n"
+    "- `normalized`: valori in [0, 1], scalati su `sample_dur_sec` (asse **Y**, "
+    "il valore — non l'asse X del tempo).\n\n"
+    "**Non eredita da `time_mode`** (engine #222, PGE v9). Fino alla v8 lo "
+    "faceva, e uno stream `normalized` si vedeva scalare anche la testina di "
+    "lettura senza aver detto niente al riguardo: le due chiavi governano assi "
+    "diversi con riferimenti diversi — `time_mode` scala il **tempo** degli "
+    "envelope sulla `duration` dello stream, `loop_unit` il **valore** sulla "
+    "durata del file audio. Per riavere la lettura di prima si scrive "
+    "`loop_unit: normalized`.\n\n"
+    "Il vocabolario e' **chiuso**: qualunque altra stringa e' un "
+    "`InvalidFieldValueError`, e lo e' anche la chiave scritta e lasciata "
+    "vuota (prima era falsy, quindi ereditarieta')."
+)
+# ``grain.read_direction`` (PGE #207): il verso di lettura INTERNO al grano,
+# dichiarato come funzione del tempo. Due stati, non una rampa fra i due.
+READ_DIRECTION_DOC = (
+    "**Verso di lettura interno al grano** (PGE v7.3.0): `-1` indietro, `+1` "
+    "avanti. Scalare o envelope.\n\n"
+    "- il dominio e' l'**insieme** `{-1, +1}`, non l'intervallo: `0.3` non e' "
+    "un verso e `0` non ha un segno, quindi ogni altro valore e' rifiutato al "
+    "parse, senza arrotondamento;\n"
+    "- l'interpolazione e' `step`, **imposta dalla chiave e implicita**: "
+    "l'envelope si scrive come una spezzata qualsiasi. `type: step` esplicito "
+    "e' ridondanza accettata; `linear`/`cubic` — in forma dict, per-punto o "
+    "come interp di un BP group — sono errore, mai una correzione silenziosa;\n"
+    "- e' **alternativa** a `grain.reverse`, non un suo complemento: le due "
+    "chiavi insieme sono un errore esplicito (governano la stessa grandezza "
+    "con semantiche opposte). Con entrambe assenti vale la modalita' `auto`, "
+    "il verso segue il segno di `pointer.speed_ratio`;\n"
+    "- il verso stocastico si dichiara con `deviation_probability: "
+    "{read_direction: N}` — la probabilita' per-grano di **ribaltare** il "
+    "verso dichiarato. `{reverse: N}` resta legata a `grain.reverse` e non "
+    "tocca questa chiave."
+)
 # ``spread.n`` come Env: il coro cresce e cala nel tempo. Il pezzo che sorprende
 # non e' la sintassi ma la conseguenza sul volume, quindi la doc la dice subito.
 SPREAD_N_ENV_DOC = (
@@ -292,14 +364,23 @@ _DRIFT_KEYS = [
 # Superficie engine dentro `base:` (e `streams.*.base:`).
 
 _ENGINE_STREAM_KEYS = [
-    _k("onset", "Tempo di inizio assoluto dello stream (s)."),
+    _k("onset", "Tempo di inizio assoluto dello stream (s). **Opzionale** "
+                "(PGE #220): assente vale 0, l'origine della timeline. Un "
+                "`null` esplicito vale come chiave assente, uno `0` scritto "
+                "resta una dichiarazione — e' la differenza che tiene lo "
+                "stack dal calpestare un `base.onset` ereditato."),
     _k("duration", "**Durata di uno stream** (s) — e in `base:` e' il default "
                    "per tutti gli stream del documento, scavalcabile dalla "
                    "`duration:` di una entry di `streams:`. Non e' la durata "
                    "del documento: quella e' dedotta, `max(onset + duration)`. "
-                   "Con `stack:` ogni stream deve risolverne una, propria o "
-                   "ereditata da qui. Cambiandola, gl-ls offre il ricalcolo "
-                   "dei breakpoint assoluti degli envelope."),
+                   "**Opzionale per l'engine** (PGE #205): assente vale la "
+                   "durata del sample, e le condizioni di esistenza di uno "
+                   "stream restano due, `stream_id` e `sample`. Con `stack:` "
+                   "il processo degli studi ne pretende comunque una, propria "
+                   "o ereditata da qui: le fasi si misurano sul tempo dello "
+                   "stream, non su quello del file audio. Cambiandola, gl-ls "
+                   "offre il ricalcolo dei breakpoint assoluti degli "
+                   "envelope."),
     _k("sample", "File audio sorgente (cercato in `samples_dir`).", kind="string"),
     _k("time_mode", "Unita' dell'asse X degli envelope: `absolute` (secondi, "
                     "default) | `normalized` ([0,1] mappato su duration alla "
@@ -320,15 +401,16 @@ _ENGINE_STREAM_KEYS = [
     _k("pan", "Gradi: 0 centro, ±180 estremi. Bounds [-3600, 3600]."),
     _k("pan_range", "±gradi randomizzazione per grano."),
     _k("grain", "Blocco grano: duration, duration_range, duration_unit, "
-                "envelope (finestra), reverse.",
+                "envelope (finestra), reverse | read_direction.",
        snippet="grain:\n  duration: ${1:0.05}\n  envelope: ${2:hanning}"),
     _k("pointer", "Posizione di lettura nel sample: start, speed_ratio, "
                   "offset_range, loop_start/loop_end/loop_dur, loop_unit."),
     _k("pitch", "Trasposizione unit-driven: UNA sola chiave-unita' tra "
                 "semitones, quarter_tone, eighth_tone, cents, edo(+value), ratio."),
-    _k("dephase", "Probabilita' di applicare i `_range` per-grano: false | null "
-                  "(1%) | 0-100 | envelope | dict per-parametro."),
-    _k("range_always_active", "true: i `_range` sono sempre attivi anche senza dephase."),
+    _k("deviation_probability", DEVIATION_PROBABILITY_DOC),
+    _k("dephase", DEPHASE_DEPRECATED_DOC, kind="deprecated"),
+    _k("range_always_active", "true: i `_range` sono sempre attivi anche senza "
+                              "deviation_probability."),
     _k("voices", "Multi-voice: num_voices, scatter, pitch, onset_offset, "
                  "pointer, pan (strategy per dimensione)."),
     _k("seed", "**Ignorato dall'engine.** Il seed e' top-level, non per-stream: "
@@ -371,22 +453,27 @@ _GRAIN_KEYS = [
                    "`{from, to, curve}` (morphing) o `{states, curve}` "
                    "(percorso multi-stato).", values=sorted(EI.WINDOWS)),
     _k("reverse", "Chiave **presente vuota** = reverse forzato; assente = auto "
-                  "(segue pointer.speed_ratio). `true`/`false` e' errore."),
+                  "(segue pointer.speed_ratio). `true`/`false` e' errore. "
+                  "Esclusiva con `read_direction`: insieme sono un errore, non "
+                  "una priorita'."),
+    _k("read_direction", READ_DIRECTION_DOC, values=["-1", "1"]),
 ]
 
 _POINTER_KEYS = [
-    _k("start", "Posizione iniziale in secondi (default 0). Scalare o envelope."),
+    _k("start", "Posizione iniziale di lettura (default 0), nell'unita' di "
+                "`loop_unit` — secondi se non dichiarata. Scalare o "
+                "envelope."),
     _k("speed_ratio", "Velocita' di lettura: 1 normale, -1 indietro, 0 fermo, "
                       "2 doppia. Bounds [-100, 100]."),
     _k("offset_range", "Deviazione per-grano in [-x, +x], scalata e confinata "
                        "alla finestra di loop (wrap modulare)."),
-    _k("loop_start", "Inizio loop in secondi (richiesto per attivare il loop)."),
-    _k("loop_end", "Fine loop (s). Mutuamente esclusivo con loop_dur "
-                   "(loop_end ha priorita')."),
-    _k("loop_dur", "Durata loop (s). Unica forma per un loop a cavallo della "
-                   "fine del file."),
-    _k("loop_unit", "`normalized`: i valori loop sono [0,1] scalati su "
-                    "sample_dur (asse Y, non X).", values=["normalized"]),
+    _k("loop_start", "Inizio loop (richiesto per attivare il loop), "
+                     "nell'unita' di `loop_unit`."),
+    _k("loop_end", "Fine loop, nell'unita' di `loop_unit`. Mutuamente "
+                   "esclusivo con loop_dur (loop_end ha priorita')."),
+    _k("loop_dur", "Durata loop, nell'unita' di `loop_unit`. Unica forma per "
+                   "un loop a cavallo della fine del file."),
+    _k("loop_unit", LOOP_UNIT_DOC, values=EI.LOOP_UNITS),
 ]
 
 _PITCH_KEYS = [
@@ -448,10 +535,18 @@ _VOICES_PAN_KEYS = [
     _k("step", "Gradi per voce (step; puo' essere negativo)."),
 ]
 
-_DEPHASE_KEYS = [
+# Le chiavi della forma per-parametro di ``deviation_probability``. ``reverse``
+# e ``read_direction`` sono due chiavi distinte, ognuna legata alla propria
+# chiave di ``grain:``: la prima ribalta ``grain.reverse``, la seconda il verso
+# dichiarato con ``grain.read_direction``.
+_DEVIATION_PROBABILITY_KEYS = [
     _k(name, f"Probabilita' 0-100 (o envelope) di applicare il range di `{name}` "
-             "per grano. Chiave assente = range sempre attivo se dichiarato.")
-    for name in ["volume", "pan", "duration", "pitch", "pointer", "reverse", "envelope"]
+             "per grano. Chiave assente o `null` = range sempre attivo se "
+             "dichiarato (semantica range-only), non jitter implicito."
+             + (" Con `read_direction`/`reverse` non c'e' un range: e' la "
+                "probabilita' per-grano di **ribaltare** il verso dichiarato."
+                if name in ("reverse", "read_direction") else ""))
+    for name in EI.DEVIATION_PROBABILITY_KEYS
 ]
 
 _GRAIN_ENVELOPE_KEYS = [
@@ -680,7 +775,7 @@ CONTEXTS: Dict[str, List[Key]] = {
     "voices_onset": _VOICES_ONSET_KEYS,
     "voices_pointer": _VOICES_POINTER_KEYS,
     "voices_pan": _VOICES_PAN_KEYS,
-    "dephase": _DEPHASE_KEYS,
+    "deviation_probability": _DEVIATION_PROBABILITY_KEYS,
     "engine_env": _ENGINE_ENV_KEYS,
     "axes": _AXES_RESERVED,          # + nomi d'asse liberi
     "axis": _AXIS_KEYS,
@@ -707,6 +802,7 @@ CONTEXTS: Dict[str, List[Key]] = {
 CLOSED_CONTEXTS = frozenset({
     "root", "engine_stream", "grain", "grain_envelope", "pointer", "pitch",
     "voices", "voices_pitch", "voices_onset", "voices_pointer", "voices_pan",
+    "deviation_probability",
     "axis", "env", "engine_env", "ramp", "drift", "sweep", "walk",
     "stream_override", "spread", "spread_strategy", "gain_compensation",
 })
@@ -740,7 +836,9 @@ def _engine_context(rest: KeyPath) -> str:
     head = rest[0]
     table: Dict[object, str] = {
         "grain": "grain", "pointer": "pointer", "pitch": "pitch",
-        "voices": "voices", "dephase": "dephase",
+        "voices": "voices",
+        "deviation_probability": "deviation_probability",
+        "dephase": "deviation_probability",
     }
     if head == "grain" and len(rest) >= 2 and rest[1] == "envelope":
         return "grain_envelope" if len(rest) == 2 else "value"

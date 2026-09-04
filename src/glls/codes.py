@@ -1,4 +1,4 @@
-"""I codici diagnostici del corredo, e il contratto che li lega al runtime.
+"""I codici diagnostici condivisi col runtime, e il contratto che li lega.
 
 Un codice non e' un dettaglio di formattazione: e' l'identificatore stabile con
 cui un consumatore **agisce** su una diagnostica — un editor che spegne una
@@ -45,8 +45,17 @@ from typing import Dict, FrozenSet
 #: (`CORREDO_SOTTO_CONSUMATO`) alla generazione, e da gl-ls mentre si scrive.
 CORREDO_SOTTO_CONSUMATO = "corredo-sotto-consumato"
 
+#: Una posizione nel sample lasciata senza ``pointer.loop_unit`` sotto
+#: ``time_mode: normalized``. **Warning**: da PGE v9 (engine #222) l'unita' non
+#: eredita piu' da ``time_mode``, quindi quei numeri si leggono in secondi e
+#: non come frazione della durata del sample — il documento ha un significato,
+#: ma probabilmente non quello voluto. Emesso da `granstudies.diagnostics`
+#: (``LOOP_UNIT_IMPLICITO``) al load, dall'engine a render time, e da gl-ls
+#: mentre si scrive: l'unico dei tre che arriva prima dell'ascolto.
+LOOP_UNIT_IMPLICITO = "loop-unit-implicito"
+
 #: I codici che i due repo emettono entrambi, con lo stesso significato.
-SHARED: FrozenSet[str] = frozenset({CORREDO_SOTTO_CONSUMATO})
+SHARED: FrozenSet[str] = frozenset({CORREDO_SOTTO_CONSUMATO, LOOP_UNIT_IMPLICITO})
 
 # --- anticipazioni di un errore fatale del runtime ---------------------------
 
@@ -74,14 +83,30 @@ STATIC_ONLY: FrozenSet[str] = frozenset({
     LINEAR_ENV_RUOLO,
 })
 
-#: Tutti i codici che riguardano il corredo e i due ruoli di una lista.
-CORREDO_CODES: FrozenSet[str] = SHARED | STATIC_ONLY
+#: Tutti i codici del registro: quelli condivisi col runtime e quelli su cui
+#: l'editor anticipa un errore fatale. Ogni consumatore che voglia elencare le
+#: regole filtrabili parte da qui.
+REGISTRATI: FrozenSet[str] = SHARED | STATIC_ONLY
+
+#: Il sottoinsieme che riguarda il corredo e i due ruoli di una lista. Non e'
+#: ``REGISTRATI``: il registro ha smesso di coincidere col corredo quando ci e'
+#: entrato il primo codice che parla d'altro.
+CORREDO_CODES: FrozenSet[str] = frozenset({
+    CORREDO_SOTTO_CONSUMATO,
+    CORREDO,
+    CORREDO_MOSSO,
+    LINEAR_ENV_MIGRAZIONE,
+    LINEAR_ENV_RUOLO,
+})
 
 #: Una riga di spiegazione per codice, per un consumatore che voglia mostrarla
 #: accanto alla regola (un pannello di impostazioni, un `--explain`).
 DESCRIZIONI: Dict[str, str] = {
     CORREDO_SOTTO_CONSUMATO:
         "il corredo ha piu' elementi delle voci che lo spread genera",
+    LOOP_UNIT_IMPLICITO:
+        "posizione nel sample senza 'loop_unit' sotto 'time_mode: normalized': "
+        "da PGE v9 si legge in secondi",
     CORREDO:
         "dichiarazione di corredo malformata, o in un blocco che non la ammette",
     CORREDO_MOSSO:
