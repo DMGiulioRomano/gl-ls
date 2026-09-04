@@ -9,7 +9,9 @@ base:
   time_mode: normalized
   grain: {envelope: hanning}
   volume: -6
-  pointer: {speed_ratio: 0, start: .3}
+  # start e' una frazione della durata del sample: da PGE v9
+  # 'loop_unit' non eredita piu' da 'time_mode' (engine #222).
+  pointer: {speed_ratio: 0, start: .3, loop_unit: normalized}
 let:
   d: 1
   ratio: {list: [2, 3, 4, 7]}

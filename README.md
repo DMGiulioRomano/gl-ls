@@ -60,6 +60,21 @@ Language server (LSP) per il **linguaggio di granulazione** degli
   co-varianti) / Forma 2 (stati nominati) e segnalazione degli assi misti;
 - guardia anti-runaway: stima dei breakpoint della camminata-X (> 10000 = errore
   a runtime);
+- **superficie PGE v7-v9**: `pointer.loop_unit` non eredita piu' da
+  `time_mode` (engine #222), quindi una posizione nel sample lasciata senza
+  unita' sotto `time_mode: normalized` e' un **warning con codice condiviso col
+  runtime** (`loop-unit-implicito`) e due quick fix — `normalized` per la
+  lettura di prima, `seconds` per confermare i secondi; il vocabolario di
+  `loop_unit` e' chiuso (`seconds` | `absolute` | `normalized`) e la chiave
+  scritta-e-vuota non e' piu' «eredita», e' un errore;
+- **`grain.read_direction`** (PGE #207): dominio `{-1, +1}` — un insieme, non
+  l'intervallo fra i due — `step` come unica interpolazione dichiarabile
+  (dict, per-punto o BP group), e la coppia con `grain.reverse` che l'engine
+  rifiuta invece di risolvere per priorita';
+- **`deviation_probability`**: `dephase` e' morta (PGE #204 rinomina senza
+  alias, quick fix di rinomina), la chiave **scritta e lasciata vuota** e'
+  jitter implicito all'1% e non «assente», e da PGE v8 un corpo che non si
+  costruisce come envelope e' errore invece di ricadere su un gate al 100%;
 - blocco pitch unit-driven, finestre sconosciute, `reverse: true`,
   `loop_end <= loop_start`, `curve` con `type: step`, tempi di banda fuori [0,1]...
 
@@ -92,9 +107,9 @@ legenda dei posizionali di una manopola in forma compatta a cicli.
   lei sola;
 - **converti `time_mode` absolute ↔ normalized** ricalcolando i tempi;
 - quick fix: rinomina chiave/valore, rimuovi generatore in piu', aggiungi
-  `n`/`baseline`/`base.duration`, **sposta la `duration:` top-level** dove ora
-  vive (`base.duration` o `versions.duration`), appiattisci `rand:`/`cps:`,
-  `sweep.combine`.
+  `n`/`baseline`/`base.duration`/`pointer.loop_unit`, **sposta la `duration:`
+  top-level** dove ora vive (`base.duration` o `versions.duration`),
+  appiattisci `rand:`/`cps:`, `sweep.combine`.
 
 **E ancora**: semantic tokens (sezioni, nomi d'asse, marcatori di banda, enum,
 espressioni expr tokenizzate); outline del documento; **inlay hint** con la

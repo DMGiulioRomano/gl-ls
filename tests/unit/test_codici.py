@@ -27,14 +27,25 @@ def test_il_codice_condiviso_e_esattamente_questo():
     assert codes.CORREDO_SOTTO_CONSUMATO == "corredo-sotto-consumato"
 
 
+def test_il_secondo_codice_condiviso_e_esattamente_questo():
+    assert codes.LOOP_UNIT_IMPLICITO == "loop-unit-implicito"
+
+
 def test_le_due_categorie_sono_disgiunte():
     assert not (codes.SHARED & codes.STATIC_ONLY)
-    assert codes.CORREDO_CODES == codes.SHARED | codes.STATIC_ONLY
+    assert codes.REGISTRATI == codes.SHARED | codes.STATIC_ONLY
+
+
+def test_il_corredo_e_un_sottoinsieme_del_registro():
+    """Il registro ha smesso di coincidere col corredo quando ci e' entrato il
+    primo codice che parla d'altro."""
+    assert codes.CORREDO_CODES < codes.REGISTRATI
+    assert codes.LOOP_UNIT_IMPLICITO not in codes.CORREDO_CODES
 
 
 def test_ogni_codice_ha_una_descrizione():
     """Serve a un consumatore che mostri la regola in un pannello."""
-    assert set(codes.DESCRIZIONI) == codes.CORREDO_CODES
+    assert set(codes.DESCRIZIONI) == codes.REGISTRATI
 
 
 # --- il lato emissione: nessun codice ad hoc sfugge al registro --------------
@@ -68,7 +79,6 @@ streams:
 def test_i_codici_emessi_vengono_dal_registro(corpo, atteso):
     got = {d.code for d in _diags(_TESTA + corpo)}
     assert atteso in got
-    assert got & codes.CORREDO_CODES <= codes.CORREDO_CODES
 
 
 def test_il_warning_condiviso_usa_il_codice_condiviso():
@@ -91,22 +101,26 @@ def _granstudies_codes():
 @pytest.mark.skipif(_granstudies_codes() is None,
                     reason="granstudies non importabile: la verifica "
                            "incrociata vale per chi ha entrambi i repo")
-def test_il_codice_condiviso_coincide_col_runtime():
+def test_i_codici_condivisi_coincidono_col_runtime():
     """Il cuore del contratto: se il runtime rinomina, questo test cade."""
     gs = _granstudies_codes()
     assert gs.CORREDO_SOTTO_CONSUMATO == codes.CORREDO_SOTTO_CONSUMATO
+    assert gs.LOOP_UNIT_IMPLICITO == codes.LOOP_UNIT_IMPLICITO
 
 
 @pytest.mark.skipif(_granstudies_codes() is None,
                     reason="granstudies non importabile")
 def test_ogni_codice_del_runtime_e_dichiarato_condiviso():
-    """Un codice nuovo lato runtime non deve restare ignoto a gl-ls: o e'
-    condiviso e va in SHARED, o e' fuori dal corredo e non riguarda questo
-    registro."""
+    """Un codice nuovo lato runtime non deve restare ignoto a gl-ls: se il
+    runtime lo emette, o gl-ls lo emette con lo stesso nome o non lo emette
+    affatto — e in nessuno dei due casi puo' chiamarlo in un altro modo.
+
+    Il filtro guarda le costanti *pubbliche* di tipo stringa: i nomi privati
+    (``_PUNTATO``) sono dettagli di implementazione del runtime, non codici."""
     gs = _granstudies_codes()
     del_runtime = {
         v for k, v in vars(gs).items()
-        if k.isupper() and isinstance(v, str) and v.startswith("corredo")
+        if k.isupper() and not k.startswith("_") and isinstance(v, str)
     }
     assert del_runtime <= codes.SHARED, (
         "codici del runtime non dichiarati in codes.SHARED: "

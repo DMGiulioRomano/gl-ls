@@ -33,6 +33,22 @@ def test_stack_requires_duration():
     assert "stack-duration" in codes(text)
 
 
+def test_onset_e_duration_sono_opzionali():
+    """Le condizioni di esistenza di uno stream sono due, ``stream_id`` e
+    ``sample`` (PGE #205 e #220): ``duration`` assente vale la durata del
+    sample, ``onset`` assente vale l'origine della timeline. Marcarle
+    obbligatorie sarebbe un errore su uno YAML che l'engine renderizza."""
+    text = BASE.replace("  onset: 0\n", "").replace("  duration: 6\n", "")
+    assert diags_of(text) == []
+
+
+def test_lo_stack_pretende_comunque_una_duration():
+    """Regola dello studio, non dell'engine: le fasi dello sweep si misurano
+    sul tempo dello stream, non su quello del file audio."""
+    text = BASE.replace("  duration: 6\n", "") + "stack: {}\n"
+    assert "stack-duration" in codes(text)
+
+
 def test_stack_duration_from_base_not_flagged():
     # base.duration e' il default di documento: gli stream la ereditano
     assert "stack-duration" not in codes(BASE + "stack: {}\n")
