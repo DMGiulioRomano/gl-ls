@@ -33,6 +33,30 @@ Tre strati, tutti puri e testabili senza LSP:
   osservabile (bounds, enum, regole di parse, grammatica expr) come snapshot
   dichiarativo. Costo: va tenuto allineato; beneficio: il server si installa
   ovunque senza l'engine, e non esegue codice del progetto aperto.
+- **Lo snapshot si verifica, non si importa** (gl-ls #43). granstudies ha
+  smesso di tenere una tabella di bounds propria proprio perche' divergeva, e
+  la domanda "regge quella di `engine_info`?" e' tornata da li'. La risposta e'
+  no per conto suo, ma un import non e' il rimedio: dei tre disallineamenti
+  trovati in quel giro, due erano *nomi* (`num_voices` per
+  `voices.num_voices`) e il terzo — il minimo di `grain.duration` — e' una
+  costante di **studio**, `MIN_GRAIN_SAMPLES = 4`, che nell'engine non esiste.
+  `pge.api.parameter_bounds()` non avrebbe detto niente su nessuno dei due, e
+  il termine di paragone giusto non e' l'engine ma granstudies, che di questi
+  `study.yml` e' il runtime. Vale quindi la stessa forma del contratto sui
+  codici: nessuna dipendenza, una **verifica opportunista**
+  (`test_snapshot_granstudies.py`) che confronta path e bounds col runtime
+  quando e' importabile e in CI si salta.
+- **I path sono chiavi YAML, non nomi di registry**. Tre parametri hanno due
+  grafie, e la seconda non e' un sinonimo: `num_voices`/`scatter` vivono
+  dentro il blocco `voices:`, e `pointer_deviation` si dichiara come
+  `pointer.offset_range`. Scritta la grafia di registry, l'override atterra
+  dove l'engine non guarda: il render gira, il parametro resta al default e
+  nessun runtime protesta. E' l'unico errore di questa famiglia che sia
+  *muto*, quindi ha un codice suo (`registry-spelling`) invece di nascondersi
+  dietro `unknown-path`, che invita a cercare un refuso. La mappa vive in
+  `engine_info.REGISTRY_SPELLINGS` e la verifica incrociata la tiene onesta:
+  il giorno in cui granstudies impara la chiave YAML, il test cade e la voce
+  si toglie.
 - **Ricalcoli come code action con TextEdit**, non come comandi custom: cosi'
   funzionano in ogni client senza supporto speciale (`workspace/applyEdit`
   non serve, l'edit viaggia nella risposta).
@@ -96,8 +120,13 @@ Tre strati, tutti puri e testabili senza LSP:
   non i `values` di spread (semantica ambigua).
 - I bounds dinamici dell'engine (`loop_* <= sample_dur`) non sono verificati
   (servirebbe leggere il file audio). Da PGE v5.1.0 `pge.api.parameter_bounds()`
-  li espone gia' risolti: chiuderebbe il drift della tabella di `engine_info`,
-  al prezzo della scelta standalone.
+  li espone gia' risolti, ma dipenderne costerebbe la scelta standalone e non
+  chiuderebbe il drift che conta: i bounds che questi `study.yml` devono
+  rispettare sono quelli di granstudies, che sull'engine ne stringe due
+  (`VOLUME_MAX_DB`, `MIN_GRAIN_SAMPLES`). Vedi la decisione sopra.
+- Il dominio di `grain.read_direction` e' il **segno** (`-1` | `+1`): `0` sta
+  nei bounds e l'engine lo rifiuta lo stesso. gl-ls confronta i bounds, non il
+  dominio, quindi quel valore passa.
 - La superficie posizionale degli envelope engine (forma compatta a cicli, BP
   group `[points, interp]`) si valida per *forma*, non per grammatica: i
   predicati sono quelli ufficiali della disambiguazione — cornice a 3-6

@@ -263,11 +263,44 @@ def _check_bounds_value(
         n = n * EI.grain_duration_factor(grain_unit)
     lo, hi = b
     if (lo is not None and n < lo) or (hi is not None and n > hi):
+        lo_s = "-∞" if lo is None else f"{lo:g}"
         hi_s = "∞" if hi is None else f"{hi:g}"
+        # sotto il floor di grain.duration il valore e' renderizzabile e viene
+        # rifiutato lo stesso: senza la nota il numero sembra un limite
+        # dell'engine, e lo si va a cercare dove non c'e'
+        why = ("" if engine_path != "grain.duration" or lo is None or n >= lo
+               else " " + EI.grain_floor_note())
         bag.add(path,
-                f"{label}: {n:g}{note} fuori bounds [{lo:g}, {hi_s}] "
-                f"per '{engine_path}'.",
+                f"{label}: {n:g}{note} fuori bounds [{lo_s}, {hi_s}] "
+                f"per '{engine_path}'.{why}",
                 code="out-of-bounds", prefer_value=True)
+
+
+def _registry_spelling(bag: Bag, path: KeyPath, name: str, prefix: str,
+                       fix_kind: str, prefer_value: bool = False) -> bool:
+    """Il nome del parametro nel registry engine scritto dove va la chiave YAML.
+
+    Tre parametri hanno due grafie (``EI.REGISTRY_SPELLINGS``), e quella del
+    registry non e' un sinonimo: l'override finisce in una chiave che l'engine
+    non legge mai, quindi il render gira e il parametro resta al default.
+    Nessuno dei due runtime protesta — il floor di ``grain.duration`` almeno
+    fallisce al parse, questo no — per cui la diagnostica ha un codice suo e
+    non si nasconde dietro ``unknown-path``, che invita a cercare un refuso.
+
+    ``True`` se la diagnostica e' stata emessa (il chiamante non deve
+    aggiungerne un'altra sullo stesso posto)."""
+    vero = EI.REGISTRY_SPELLINGS.get(name)
+    if vero is None:
+        return False
+    bag.add(path,
+            f"{prefix}'{name}' e' il nome del parametro nel registry engine, "
+            f"non la chiave YAML: nello stream il valore vive in '{vero}'. "
+            "Scritto cosi' l'override atterra dove l'engine non guarda — "
+            "nessun errore, e il parametro resta al default.",
+            types.DiagnosticSeverity.Warning, code="registry-spelling",
+            prefer_value=prefer_value,
+            data={"fix": {"kind": fix_kind, "new": vero}})
+    return True
 
 
 def _is_structural_slot_path(p: KeyPath) -> bool:
@@ -417,7 +450,9 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
         if "path" not in cfg:
             # path derivato dalla chiave (issue granstudies #32): la chiave
             # stessa, anche dotted, e' il path engine — va validata come tale
-            if (name not in EI.PARAMS
+            if (not _registry_spelling(bag, apath, name, f"Asse '{name}': ",
+                                       "rename")
+                    and name not in EI.PARAMS
                     and name != "pitch" and not name.startswith("pitch.")):
                 sug = _suggest(name, EI.AXIS_PATHS)
                 extra = (f" Forse intendevi '{sug}'?" if sug
@@ -429,7 +464,11 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
                         data={"fix": {"kind": "rename", "new": sug}} if sug else None)
         else:
             p = cfg.get("path")
-            if (isinstance(p, str) and p not in EI.PARAMS
+            spelling = isinstance(p, str) and _registry_spelling(
+                bag, apath + ("path",), p, "", "rename-value", prefer_value=True)
+            if spelling:
+                pass  # gia' detto, e con piu' precisione
+            elif (isinstance(p, str) and p not in EI.PARAMS
                     and p != "pitch" and not p.startswith("pitch.")):
                 sug = _suggest(p, EI.AXIS_PATHS)
                 extra = f" Forse intendevi '{sug}'?" if sug else ""
