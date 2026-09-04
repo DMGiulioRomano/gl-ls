@@ -46,6 +46,24 @@ Tre strati, tutti puri e testabili senza LSP:
   codici: nessuna dipendenza, una **verifica opportunista**
   (`test_snapshot_granstudies.py`) che confronta path e bounds col runtime
   quando e' importabile e in CI si salta.
+- **La verifica dev'essere totale, o guarda dove il drift non c'e'**. Il primo
+  giro chiedeva a granstudies, che pero' indicizza dodici dei ventisette path
+  dello snapshot: i quindici fuori non erano confrontati con niente, e li' sono
+  rimasti per un giro quattro bounds sbagliati. Erano le chiavi `_range` — la
+  banda della randomizzazione per grano — prese dai bounds del *valore* invece
+  che da quelli della banda: `min_range`/`max_range` sono altri numeri e molto
+  piu' stretti (`volume_range` 24 dB contro i 132 di escursione del valore,
+  `pan_range` un giro contro dieci, `grain.duration_range` 1 s contro 10). Tutti
+  e quattro nella direzione peggiore: piu' larghi del vero, quindi l'editor
+  taceva su cio' che il parser dell'engine rifiuta con `ParameterBoundError`.
+  Il rimedio non e' un altro confronto ma una **provenienza dichiarata**:
+  `engine_info.ORIGINS` dice per ogni path da dove vengono i suoi numeri
+  (registry engine con lo slot `value`/`range`, unita' di pitch, o `studio`
+  quando l'engine non ha niente da dire), il test la percorre tutta e ne
+  pretende la totalita' su `PARAMS`. Un path aggiunto domani non puo' entrare
+  senza dire contro cosa si verifica. L'engine lo si raggiunge **attraverso**
+  granstudies — e' il suo submodule, con la patch di `VOLUME_MAX_DB` gia'
+  applicata: sempre il runtime, guardato un livello piu' sotto.
 - **I path sono chiavi YAML, non nomi di registry**. Tre parametri hanno due
   grafie, e la seconda non e' un sinonimo: `num_voices`/`scatter` vivono
   dentro il blocco `voices:`, e `pointer_deviation` si dichiara come
@@ -57,6 +75,14 @@ Tre strati, tutti puri e testabili senza LSP:
   `engine_info.REGISTRY_SPELLINGS` e la verifica incrociata la tiene onesta:
   il giorno in cui granstudies impara la chiave YAML, il test cade e la voce
   si toglie.
+  La stessa divergenza ha una seconda meta', sui numeri:
+  indicizzando `pointer.deviation` sul registry, granstudies ne legge i bounds
+  del *valore*, ma il valore una chiave YAML non ce l'ha
+  (`yaml_path='_dummy_fixed_zero_'`) — la sola meta' dichiarabile e' la banda
+  `offset_range`, che vive in `[0, 1]` e non in `[-1, 1]`. Il runtime accetta
+  quindi una deviazione negativa che il suo stesso engine rifiuta al parse;
+  gl-ls no. Anche questa e' dichiarata (`engine_info.RUNTIME_VALUE_FOR_RANGE`)
+  e asserita, con la stessa regola: quando cade, si toglie la voce.
 - **Ricalcoli come code action con TextEdit**, non come comandi custom: cosi'
   funzionano in ogni client senza supporto speciale (`workspace/applyEdit`
   non serve, l'edit viaggia nella risposta).
@@ -156,6 +182,16 @@ Tre strati, tutti puri e testabili senza LSP:
   chiuderebbe il drift che conta: i bounds che questi `study.yml` devono
   rispettare sono quelli di granstudies, che sull'engine ne stringe due
   (`VOLUME_MAX_DB`, `MIN_GRAIN_SAMPLES`). Vedi la decisione sopra.
+- `pitch.range` non ha bounds nello snapshot: il suo `max_range` dipende
+  dall'unita' attiva (36 in semitoni, 3600 in cents, 2.0 in `ratio`), quindi
+  non e' una riga di `PARAMS` ma una funzione del blocco. La chiave e' nota a
+  `schema.py` — completion e hover ci sono — e il valore passa senza confronto.
+- Tre path hanno bounds **nostri** e non dell'engine, dichiarati
+  `studio` in `ORIGINS`: `pointer.start` (che l'engine tratta come valore raw,
+  `is_smart=False`, senza bounds) e `onset`/`duration` (campi di
+  `StreamContext`, non parametri del registry). Il minimo a 0 e' strutturale —
+  una posizione in un file non e' negativa, la timeline comincia a zero — ed e'
+  l'unico posto dove gl-ls e' piu' stretto del runtime.
 - Un `loop_unit` scritto per **path puntato** (`base.pointer.loop_unit` in
   `spread.over`/`versions:`) non viene visto dal rilievo sulla migrazione, che
   quindi darebbe un falso positivo. E' il limite del gemello runtime, accettato
