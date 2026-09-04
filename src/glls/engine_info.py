@@ -13,13 +13,36 @@ dinamici gia' applicati (``grain_duration.min_val = 1/output_sr``, ``loop_*``
 limitati a ``sample_dur_sec``). Finche' la scelta standalone resta, quei
 bounds dinamici sono fuori portata: vedi "Limiti noti" in
 ``docs/architettura.md``.
+
+Le chiavi di ``PARAMS`` sono **path YAML**, non nomi del registry engine: e'
+la sola grafia che l'engine legge davvero, ed e' quella che un ``path:`` di
+``axes``/``spread.over`` deve avere. Dove le due grafie divergono, la seconda
+non e' un sinonimo ma un errore muto — vedi ``REGISTRY_SPELLINGS``.
+
+Due bounds qui dentro non sono dell'engine ma di *granulation-studies*, che li
+stringe (``VOLUME_MAX_DB``, ``MIN_GRAIN_SAMPLES``): il runtime che valida
+questi ``study.yml`` e' quello, quindi la superficie da rispecchiare e' la sua.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
 
 OUTPUT_SR = 48000
+
+# Minimo di ``grain.duration`` **in campioni**. Non e' un dato dell'engine, che
+# scende a 1 campione (``pge.api.parameter_bounds(output_sr=...)`` porta
+# ``grain_duration.min_val`` a ``1/output_sr``): e' un vincolo di *studio*,
+# granulation-studies ``bounds.MIN_GRAIN_SAMPLES`` — sotto i 4 campioni il
+# grano non ha inviluppo udibile, e ``granstudies sweep`` rifiuta il valore al
+# parse invece di renderizzarlo. Vale sempre, anche coi valori scritti in
+# secondi: prima il floor dinamico si accendeva solo con una
+# ``grain.duration_unit`` dichiarata, e uno studio in secondi passava muto qui
+# per poi fallire di la'.
+MIN_GRAIN_SAMPLES = 4
+
+#: Il floor di ``grain.duration`` in secondi, alla frequenza di render.
+GRAIN_DURATION_MIN = MIN_GRAIN_SAMPLES / OUTPUT_SR
 
 # Tetto di ``volume``. Non e' un dato fisso dell'engine: e' una costante di
 # *studio*. granulation-studies (``granstudies/engine_bridge.py``, costante
@@ -34,11 +57,19 @@ VOLUME_MAX_DB = 24.0
 
 @dataclass(frozen=True)
 class ParamInfo:
-    """Bounds/default/unita' di un parametro engine (path dotted)."""
+    """Bounds/default/unita' di un parametro engine (path dotted).
+
+    ``min``/``max`` a ``None`` insieme dicono *nessun bound numerico*: il
+    parametro non e' un numero (``grain.envelope`` e' un nome di finestra).
+    ``max`` da solo a ``None`` e' il bound dinamico dell'engine (``loop_*``,
+    limitati alla durata del sample). ``default`` a ``None`` e' l'assenza di
+    default engine, cioe' il baseline obbligatorio in un asse; puo' anche non
+    essere un numero, per gli stessi parametri senza bounds.
+    """
 
     min: Optional[float]
-    max: Optional[float]  # None = bound dinamico (es. sample_dur)
-    default: Optional[float]
+    max: Optional[float]
+    default: Optional[Union[float, str]]
     unit: str
     doc: str
 
@@ -52,14 +83,29 @@ PARAMS: Dict[str, ParamInfo] = {
         "density = fill_factor / grain.duration; ha priorita' su density."),
     "distribution": ParamInfo(0, 1, 0.0, "0..1",
         "Distribuzione temporale (modello Truax): 0 = sincrono, 1 = asincrono."),
-    "grain.duration": ParamInfo(1.0 / OUTPUT_SR, 10, 0.05, "s",
+    "grain.duration": ParamInfo(GRAIN_DURATION_MIN, 10, 0.05, "s",
         "Durata del singolo grano. I bounds sono in secondi: con una "
         "`duration_unit` dichiarata (`samples` = campioni a 48000 Hz, "
         "`milliseconds` = ms) i valori vivono in quell'unita' e si convertono "
-        "prima del confronto."),
+        "prima del confronto. Il minimo e' il floor di studio di "
+        "`MIN_GRAIN_SAMPLES` campioni, non il campione singolo dell'engine."),
     "grain.duration_range": ParamInfo(0, 10, None, "±s",
         "Randomizzazione ± della durata per grano, nell'unita' di "
         "`grain.duration_unit`."),
+    "grain.envelope": ParamInfo(None, None, "hanning", "nome di finestra",
+        "Finestra del grano: un nome, non un numero — nessun bound da "
+        "confrontare (`variation_mode='choice'`). I nomi ammessi sono in "
+        "`WINDOWS`."),
+    "grain.reverse": ParamInfo(0, 1, 0.0, "0|1",
+        "Verso del grano nella grafia storica: presente-e-vuota = sempre "
+        "indietro, assente = `auto` (segue il segno di `pointer.speed_ratio`). "
+        "In gruppo esclusivo con `grain.read_direction`: dichiararle entrambe "
+        "e' un errore dell'engine."),
+    "grain.read_direction": ParamInfo(-1, 1, None, "verso",
+        "Verso di lettura interno al grano: -1 indietro, +1 avanti, scalare o "
+        "envelope, indipendente dal segno della velocita' della testina. Il "
+        "dominio e' il segno — 0 sta nei bounds ma l'engine lo rifiuta. Senza "
+        "default engine: in un asse il `baseline` e' obbligatorio."),
     "volume": ParamInfo(-120, VOLUME_MAX_DB, 0.0, "dB",
         "Volume dello stream. Sopra 0 dBFS il renderer non normalizza: il "
         "range positivo e' clipping reale, non headroom."),
@@ -105,6 +151,59 @@ def needs_baseline(path: str) -> bool:
         return True
     info = PARAMS.get(path)
     return info is not None and info.default is None
+
+
+def fmt_default(info: ParamInfo) -> str:
+    """Il default di un parametro come testo: numero, nome, o assenza."""
+    if info.default is None:
+        return "—"
+    if isinstance(info.default, str):
+        return f"`{info.default}`"
+    return f"{info.default:g}"
+
+
+def bounds_phrase(info: ParamInfo) -> str:
+    """``bounds [lo, hi] unit``, o la frase di chi bounds numerici non ne ha."""
+    if info.min is None and info.max is None:
+        return f"{info.unit} — nessun bound numerico"
+    lo = "-∞" if info.min is None else f"{info.min:g}"
+    hi = "∞" if info.max is None else f"{info.max:g}"
+    return f"bounds [{lo}, {hi}] {info.unit}"
+
+
+def grain_floor_note() -> str:
+    """Perche' ``grain.duration`` ha quel minimo, detto una volta sola.
+
+    Un valore sotto il floor e' *renderizzabile* — l'engine scende a un
+    campione — e viene rifiutato lo stesso: il messaggio deve dire di chi e'
+    il vincolo, altrimenti sembra un limite dell'engine e si va a cercarlo
+    dove non c'e'."""
+    return (f"Il minimo e' {MIN_GRAIN_SAMPLES} campioni a {OUTPUT_SR} Hz "
+            f"({GRAIN_DURATION_MIN:g} s): e' un vincolo di studio, non "
+            f"dell'engine — che scende a 1 campione — perche' sotto i "
+            f"{MIN_GRAIN_SAMPLES} campioni il grano non ha inviluppo udibile.")
+
+
+# ---------------------------------------------------------------------------
+# Grafie di *registry* che non sono chiavi YAML.
+#
+# ``granstudies.bounds`` indicizza i bounds col nome che il parametro ha nel
+# registry dell'engine (``GRANULAR_PARAMETERS``), e per tre parametri quel
+# nome non coincide con la chiave dove il valore va scritto nello stream:
+# ``num_voices``/``scatter`` vivono dentro il blocco ``voices:``
+# (``pge.core.stream._init_voice_manager``), e ``pointer_deviation`` non ha
+# affatto una chiave propria — si dichiara come ``offset_range`` dentro
+# ``pointer:`` (``POINTER_PARAMETER_SCHEMA``, ``range_path='offset_range'``).
+#
+# Scritte come path in ``axes``/``spread.over`` producono un override che
+# atterra dove l'engine non guarda: nessuno dei due runtime protesta, il
+# render gira, e il parametro resta al default. E' il caso peggiore — muto —
+# quindi qui ha una diagnostica sua invece del generico ``unknown-path``.
+REGISTRY_SPELLINGS: Dict[str, str] = {
+    "num_voices": "voices.num_voices",
+    "scatter": "voices.scatter",
+    "pointer.deviation": "pointer.offset_range",
+}
 
 
 # ---------------------------------------------------------------------------
