@@ -29,13 +29,16 @@ def _md(value: str, rng: Optional[types.Range] = None) -> types.Hover:
 
 
 def _bounds_line(dotted: str) -> str:
+    """La riga bounds/default di un path engine.
+
+    Passa da ``engine_info`` per la formattazione: un parametro puo' non avere
+    bounds numerici affatto (``grain.envelope`` e' un nome di finestra) e un
+    default puo' non essere un numero."""
     info = EI.PARAMS.get(dotted)
     if not info:
         return ""
-    hi = "∞" if info.max is None else f"{info.max:g}"
-    dflt = "—" if info.default is None else f"{info.default:g}"
-    return (f"\n\n`{dotted}` — bounds **[{info.min:g}, {hi}]** {info.unit} · "
-            f"default {dflt}")
+    return (f"\n\n`{dotted}` — **{EI.bounds_phrase(info)}** · "
+            f"default {EI.fmt_default(info)}")
 
 
 def _axis_summary(m: StudyModel, name: str) -> str:

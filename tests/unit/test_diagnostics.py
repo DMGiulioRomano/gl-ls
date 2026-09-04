@@ -420,8 +420,9 @@ def test_grain_duration_samples_real_violation_flagged():
     assert "campioni" in d.message
 
 
-def test_grain_duration_samples_below_one_sample_flagged():
-    # il floor in spazio-campioni e' 1 campione (1/output_sr secondi)
+def test_grain_duration_samples_below_the_floor_flagged():
+    # il floor in spazio-campioni e' MIN_GRAIN_SAMPLES (gl-ls #43): mezzo
+    # campione ci sta sotto in ogni caso
     text = BASE.replace(
         "base:\n",
         "base:\n  grain:\n    duration: 0.5\n    duration_unit: samples\n")

@@ -190,8 +190,8 @@ def _complete_key(doc: yamlpos.Document, m: StudyModel,
             info = EI.PARAMS[dotted]
             items.append(_item(
                 dotted,
-                f"Asse su `{dotted}` (path derivato dalla chiave). {info.doc} — "
-                f"bounds [{_b(info.min)}, {_b(info.max)}] {info.unit}",
+                f"Asse su `{dotted}` (path derivato dalla chiave). {info.doc} "
+                f"— {EI.bounds_phrase(info)}",
                 types.CompletionItemKind.Class,
                 snippet=f"{dotted}:\n  ",
                 sort="2",
@@ -301,7 +301,7 @@ def _complete_value(doc: yamlpos.Document, m: StudyModel, path: Tuple[str, ...],
                 doc_md = EI.X_UNITS[v]
             if key == "path" and v in EI.PARAMS:
                 info = EI.PARAMS[v]
-                doc_md = f"{info.doc} — bounds [{_b(info.min)}, {_b(info.max)}] {info.unit}"
+                doc_md = f"{info.doc} — {EI.bounds_phrase(info)}"
             items.append(_item(v, doc_md, types.CompletionItemKind.EnumMember, sort="1"))
     if key == "sample":
         samples_dir = doc.get(("samples_dir",), "samples") or "samples"
@@ -333,10 +333,6 @@ def _engine_env_path(path: Tuple[str, ...], key: str) -> Optional[str]:
         return None
     dotted = ".".join([*(str(p) for p in parts[1:]), key])
     return dotted if dotted in EI.PARAMS else None
-
-
-def _b(v: Optional[float]) -> str:
-    return "∞" if v is None else f"{v:g}"
 
 
 def _complete_item(m: StudyModel, path: Tuple[str, ...]) -> List[types.CompletionItem]:

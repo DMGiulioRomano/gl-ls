@@ -19,7 +19,13 @@ Language server (LSP) per il **linguaggio di granulazione** degli
 - **n-ownership** nelle due direzioni (banda senza `n` senza camminata-X;
   camminata-X con Y che enumera);
 - bounds engine su `baseline`, `values` e sugli envelope di `base.*`
-  (density [0.01, 4000], volume [-120, 24], ...);
+  (density [0.01, 4000], volume [-120, 24], ...), compreso il floor di
+  `grain.duration` a **4 campioni** — vincolo di studio, non dell'engine, e il
+  messaggio lo dice invece di lasciar cercare il limite dove non c'e';
+- **grafie di registry** scambiate per chiavi YAML (`num_voices` invece di
+  `voices.num_voices`, `pointer.deviation` invece di `pointer.offset_range`):
+  l'unico errore di questa famiglia che a runtime resta muto — l'override
+  atterra dove l'engine non guarda e il parametro resta al default;
 - **slot strutturali**: `baseline` e gli elementi di `values` vogliono numeri —
   un nodo-expr, una stringa o una lista li' e' errore (a differenza di
   `base`/`range` di una banda, che sono Env e un `expr:` lo accettano);
