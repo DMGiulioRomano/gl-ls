@@ -212,3 +212,46 @@ def test_hover_su_un_path_senza_bounds_numerici_non_esplode():
 
 def test_read_direction_ha_i_bounds_col_segno():
     assert EI.bounds_for("grain.read_direction") == (-1, 1)
+
+
+# --- 4. la banda ha bounds suoi, non quelli del valore ----------------------
+#
+# Quattro chiavi ``_range`` (l'ampiezza della randomizzazione per grano) non
+# si confrontano con ``min_val``/``max_val`` del parametro ma con
+# ``min_range``/``max_range``, che nell'engine sono numeri diversi e molto
+# piu' stretti. Lo snapshot li aveva presi dal valore — o inventati — e nella
+# direzione peggiore: piu' larghi del vero, quindi l'editor taceva su cio' che
+# il parser dell'engine rifiuta con ``ParameterBoundError``.
+
+
+def test_i_bounds_della_banda_sono_quelli_della_banda():
+    assert EI.bounds_for("grain.duration_range") == (0, 1)
+    assert EI.bounds_for("volume_range") == (0, 24)
+    assert EI.bounds_for("pan_range") == (0, 360)
+    # 'pointer.offset_range' e' la banda di 'pointer_deviation', il cui valore
+    # non ha una chiave YAML propria (yaml_path='_dummy_fixed_zero_'): il
+    # dominio dichiarabile e' [0, 1], non il [-1, 1] del valore.
+    assert EI.bounds_for("pointer.offset_range") == (0, 1)
+
+
+def test_una_banda_fuori_bounds_non_passa_muta():
+    fuori = {
+        "  volume_range: 100\n": "volume_range",
+        "  pan_range: 1000\n": "pan_range",
+    }
+    for riga, path in fuori.items():
+        text = BASE.replace("  sample: corpus.wav\n",
+                            "  sample: corpus.wav\n" + riga)
+        assert "out-of-bounds" in codes(text), path
+
+
+def test_una_banda_di_durata_fuori_bounds_non_passa_muta():
+    # 5 s di banda su una durata di grano: l'engine si ferma a 1 s
+    assert "out-of-bounds" in codes(_grain("    duration_range: 5\n"))
+
+
+def test_una_banda_di_deviazione_negativa_non_passa_muta():
+    text = BASE.replace("  sample: corpus.wav\n",
+                        "  sample: corpus.wav\n"
+                        "  pointer:\n    offset_range: -0.5\n")
+    assert "out-of-bounds" in codes(text)

@@ -167,3 +167,15 @@ gl-ls e' **standalone**: non importa granstudies ne' l'engine; replica la loro
 superficie osservabile (documentata in `docs/study-yml-reference.md` e
 `docs/reference/yaml.md` dei rispettivi repo). Quando quella superficie cambia,
 va aggiornato lo snapshot in `engine_info.py`/`schema.py`.
+
+Ogni riga di `engine_info.PARAMS` dichiara in `ORIGINS` da dove vengono i suoi
+numeri — parametro del registry engine (coi bounds del *valore* o quelli della
+*banda*, che sono altri numeri), unita' di pitch, o costante di studio. Chi ha
+anche granulation-studies col suo submodule engine esegue la verifica
+incrociata, che percorre quella mappa e pretende sia totale:
+
+```bash
+PYTHONPATH=/percorso/a/granulation-studies/src make unit-tests
+```
+
+Senza quel checkout i test si saltano (in CI non c'e' l'engine).

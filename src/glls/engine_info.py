@@ -89,9 +89,10 @@ PARAMS: Dict[str, ParamInfo] = {
         "`milliseconds` = ms) i valori vivono in quell'unita' e si convertono "
         "prima del confronto. Il minimo e' il floor di studio di "
         "`MIN_GRAIN_SAMPLES` campioni, non il campione singolo dell'engine."),
-    "grain.duration_range": ParamInfo(0, 10, None, "±s",
+    "grain.duration_range": ParamInfo(0, 1, None, "±s",
         "Randomizzazione ± della durata per grano, nell'unita' di "
-        "`grain.duration_unit`."),
+        "`grain.duration_unit`. La banda ha bounds suoi, molto piu' stretti "
+        "del valore: 1 s, non i 10 s di `grain.duration`."),
     "grain.envelope": ParamInfo(None, None, "hanning", "nome di finestra",
         "Finestra del grano: un nome, non un numero — nessun bound da "
         "confrontare (`variation_mode='choice'`). I nomi ammessi sono in "
@@ -109,9 +110,16 @@ PARAMS: Dict[str, ParamInfo] = {
     "volume": ParamInfo(-120, VOLUME_MAX_DB, 0.0, "dB",
         "Volume dello stream. Sopra 0 dBFS il renderer non normalizza: il "
         "range positivo e' clipping reale, non headroom."),
-    "volume_range": ParamInfo(0, 132, None, "±dB", "Randomizzazione ± per grano."),
+    "volume_range": ParamInfo(0, 24, None, "±dB",
+        "Randomizzazione ± per grano. Il tetto e' il `max_range` dell'engine, "
+        "che vale 24 dB per conto suo: che il numero sia lo stesso di "
+        "`VOLUME_MAX_DB` — il `max_val`, e quello viene da granstudies — non "
+        "li lega, e legarli romperebbe il giorno in cui lo studio alza il "
+        "tetto del volume."),
     "pan": ParamInfo(-3600, 3600, 0.0, "gradi", "0 = centro, ±180 = estremi."),
-    "pan_range": ParamInfo(0, 7200, None, "±gradi", "Randomizzazione ± per grano."),
+    "pan_range": ParamInfo(0, 360, None, "±gradi",
+        "Randomizzazione ± per grano: un giro, mentre il valore arriva a "
+        "±3600 (dieci giri)."),
     "pitch.ratio": ParamInfo(0.001, 8, 1.0, "ratio", "Moltiplicatore diretto."),
     "pitch.semitones": ParamInfo(-36, 36, 0.0, "semitoni", "±3 ottave (12-EDO)."),
     "pitch.quarter_tone": ParamInfo(-72, 72, 0.0, "quarti di tono", "24-EDO."),
@@ -123,8 +131,11 @@ PARAMS: Dict[str, ParamInfo] = {
         "`time_mode`)."),
     "pointer.speed_ratio": ParamInfo(-100, 100, 1.0, "ratio",
         "Velocita' di lettura: 1 normale, -1 indietro, 0 fermo."),
-    "pointer.offset_range": ParamInfo(-1, 1, 0.0, "frazione",
-        "Deviazione per-grano, scalata e confinata alla finestra di loop."),
+    "pointer.offset_range": ParamInfo(0, 1, 0.0, "frazione",
+        "Deviazione per-grano, scalata e confinata alla finestra di loop. E' "
+        "la *banda* di `pointer_deviation`, il cui valore non ha una chiave "
+        "YAML (`yaml_path='_dummy_fixed_zero_'`): il dominio dichiarabile e' "
+        "[0, 1], non il [-1, 1] del valore."),
     "pointer.loop_start": ParamInfo(0, None, None, "s",
         "Inizio loop, nell'unita' di `pointer.loop_unit`."),
     "pointer.loop_end": ParamInfo(0, None, None, "s",
@@ -137,6 +148,100 @@ PARAMS: Dict[str, ParamInfo] = {
     "onset": ParamInfo(0, None, None, "s", "Tempo di inizio assoluto dello stream."),
     "duration": ParamInfo(0, None, None, "s", "Durata dello stream."),
 }
+
+# ---------------------------------------------------------------------------
+# Provenienza: da dove viene ogni riga di ``PARAMS``.
+#
+# La domanda di gl-ls #43 — «lo snapshot regge?» — non si risponde una volta:
+# si risponde ogni volta che l'engine si muove, e per rispondere serve sapere
+# *contro cosa* va confrontata ciascuna riga. Il primo giro l'aveva chiesto a
+# granstudies, che pero' indicizza dodici path su ventisette: nei quindici che
+# restavano fuori sono rimasti per un giro quattro bounds sbagliati, tutti
+# nella direzione peggiore (l'editor muto su cio' che il parser rifiuta).
+#
+# Questa mappa e' quel termine di paragone, dichiarato accanto ai numeri
+# invece che dentro un test: ``test_snapshot_granstudies.py`` la percorre
+# tutta e pretende che sia **totale** su ``PARAMS``, cosi' un path nuovo non
+# puo' entrare senza dire da dove vengono i suoi numeri.
+
+
+@dataclass(frozen=True)
+class Origin:
+    """Il termine di paragone dei bounds di un path.
+
+    ``kind``:
+
+    - ``"registry"`` — ``GRANULAR_PARAMETERS[name]`` dell'engine. ``slot``
+      sceglie *quale* coppia: ``"value"`` e' ``min_val``/``max_val``,
+      ``"range"`` e' ``min_range``/``max_range``. Sono numeri diversi per lo
+      stesso parametro, e una chiave ``_range`` si confronta col secondo — la
+      banda di ``volume`` si ferma a 24 dB mentre il valore copre i 144 fra
+      -120 e +24, quella di ``pan`` fa un giro dove il valore ne fa dieci.
+    - ``"pitch"`` — ``make_pitch_unit(name).value_bounds()``: il pitch e'
+      unit-driven e nel registry non c'e'
+      (``PITCH_PARAMETER_SCHEMA`` e' vuoto).
+    - ``"studio"`` — l'engine non ha niente da confrontare e ``note`` dice
+      perche'. Non e' una scusa: e' la dichiarazione che quel numero e' nostro
+      e che il drift, li', non esiste per definizione.
+    """
+
+    kind: str
+    name: str = ""
+    slot: str = "value"
+    note: str = ""
+
+
+def _reg(name: str, slot: str = "value") -> Origin:
+    return Origin("registry", name, slot)
+
+
+ORIGINS: Dict[str, Origin] = {
+    "density": _reg("density"),
+    "fill_factor": _reg("fill_factor"),
+    "distribution": _reg("distribution"),
+    "grain.duration": _reg("grain_duration"),
+    "grain.duration_range": _reg("grain_duration", "range"),
+    "grain.envelope": _reg("grain_envelope"),
+    "grain.reverse": _reg("reverse"),
+    "grain.read_direction": _reg("read_direction"),
+    "volume": _reg("volume"),
+    "volume_range": _reg("volume", "range"),
+    "pan": _reg("pan"),
+    "pan_range": _reg("pan", "range"),
+    "pitch.ratio": Origin("pitch", "ratio"),
+    "pitch.semitones": Origin("pitch", "semitones"),
+    "pitch.quarter_tone": Origin("pitch", "quarter_tone"),
+    "pitch.eighth_tone": Origin("pitch", "eighth_tone"),
+    "pitch.cents": Origin("pitch", "cents"),
+    "pointer.speed_ratio": _reg("pointer_speed_ratio"),
+    # Il *valore* di ``pointer_deviation`` non ha una chiave YAML
+    # (``yaml_path='_dummy_fixed_zero_'``): l'unica meta' dichiarabile e' la
+    # banda, e i suoi bounds sono ``min_range``/``max_range``.
+    "pointer.offset_range": _reg("pointer_deviation", "range"),
+    "pointer.loop_start": _reg("loop_start"),
+    "pointer.loop_end": _reg("loop_end"),
+    "pointer.loop_dur": _reg("loop_dur"),
+    "voices.num_voices": _reg("num_voices"),
+    "voices.scatter": _reg("scatter"),
+    "pointer.start": Origin("studio", note=
+        "``pointer_start`` e' ``is_smart=False``: valore raw, l'engine non gli "
+        "applica bounds. Il minimo a 0 e' nostro — una posizione in un file "
+        "non e' negativa — e resta l'unico posto dove gl-ls e' piu' stretto "
+        "del runtime."),
+    "onset": Origin("studio", note=
+        "Campo di ``StreamContext``, non parametro del registry: nessun bound "
+        "engine. Il minimo a 0 e' l'origine della timeline."),
+    "duration": Origin("studio", note=
+        "Come ``onset``: campo di contesto, non parametro."),
+}
+
+#: Path il cui **minimo** e' sostituito da un floor di studio, con quale
+#: valore. L'unico e' ``grain.duration``: la provenienza resta il registry —
+#: il massimo e' quello dell'engine — ma il minimo no (vedi
+#: ``MIN_GRAIN_SAMPLES``), e senza dirlo qui la verifica lo leggerebbe come
+#: drift.
+STUDIO_FLOOR: Dict[str, float] = {"grain.duration": GRAIN_DURATION_MIN}
+
 
 # Path con default engine assente: baseline obbligatorio in un asse.
 NEEDS_BASELINE = frozenset(
@@ -209,6 +314,19 @@ REGISTRY_SPELLINGS: Dict[str, str] = {
     "scatter": "voices.scatter",
     "pointer.deviation": "pointer.offset_range",
 }
+
+# Seconda meta' della stessa divergenza, sui *numeri* invece che sul nome.
+# Indicizzando ``pointer.deviation`` sul registry, granstudies ne legge
+# ``min_val``/``max_val`` — i bounds del **valore**, che pero' una chiave YAML
+# non ce l'ha (``yaml_path='_dummy_fixed_zero_'``). L'unica meta' dichiarabile
+# e' la banda ``pointer.offset_range``, e i suoi bounds sono
+# ``min_range``/``max_range``: [0, 1], non [-1, 1]. Il runtime accetta quindi
+# una deviazione negativa che il suo stesso engine rifiuta al parse.
+#
+# Dichiarata qui, e non nascosta in un `!=` del test, per la stessa ragione di
+# ``REGISTRY_SPELLINGS``: il giorno in cui granstudies legge lo slot giusto la
+# verifica cade, e la voce si toglie da qui.
+RUNTIME_VALUE_FOR_RANGE = frozenset({"pointer.deviation"})
 
 
 # ---------------------------------------------------------------------------
