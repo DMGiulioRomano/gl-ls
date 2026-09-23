@@ -351,19 +351,12 @@ def quickfixes(doc: Document, uri: str,
                                [types.TextEdit(range=diag.range, new_text="")],
                                types.CodeActionKind.QuickFix, [diag]))
         elif kind == "remove-key":
-            path = tuple(fix.get("path") or ())
-            entry = doc.entry(path)
-            if entry is None:
-                continue
-            start_line = (entry.key_span or entry.value_span).start_line
-            end_line, end_col = _block_end(entry)
-            out.append(_action(
-                f"Rimuovi '{path[-1]}'", uri,
-                [types.TextEdit(
-                    range=types.Range(start=_pos(start_line, 0),
-                                      end=_pos(end_line, end_col)),
-                    new_text="")],
-                types.CodeActionKind.QuickFix, [diag]))
+            action = _remove_key_action(doc, uri, tuple(fix.get("path") or ()),
+                                        diag)
+            if action:
+                out.append(action)
+        elif kind == "orderings-discrete":
+            out.extend(_orderings_discrete_actions(doc, uri, fix, diag))
         elif kind == "flatten-wrapper":
             path = tuple(fix.get("path") or ())
             action = _flatten_wrapper_action(doc, uri, path, diag)
@@ -480,6 +473,51 @@ def _move_duration_actions(doc: Document, uri: str, diag: types.Diagnostic,
             title, uri,
             [cut, _insert(line, 0, " " * col + f"duration: {text}\n")],
             types.CodeActionKind.QuickFix, [diag]))
+    return out
+
+
+def _remove_key_action(doc: Document, uri: str, path: KeyPath,
+                       diag: types.Diagnostic) -> Optional[types.CodeAction]:
+    """La chiave e tutto il suo blocco, righe intere."""
+    entry = doc.entry(path)
+    if entry is None or not path:
+        return None
+    start_line = (entry.key_span or entry.value_span).start_line
+    end_line, end_col = _block_end(entry)
+    return _action(
+        f"Rimuovi '{path[-1]}'", uri,
+        [types.TextEdit(
+            range=types.Range(start=_pos(start_line, 0),
+                              end=_pos(end_line, end_col)),
+            new_text="")],
+        types.CodeActionKind.QuickFix, [diag])
+
+
+def _orderings_discrete_actions(doc: Document, uri: str, fix: Dict[str, Any],
+                                diag: types.Diagnostic) -> List[types.CodeAction]:
+    """I due rimedi degli ``orderings`` sotto ``mode: discrete``.
+
+    Due azioni, non una, come per ``loop_unit``: quale sia giusto lo sa solo
+    chi li ha scritti. Togliere gli orderings riporta ``orders`` al default
+    ``[1..n]`` (le varianti discrete); ``mode: envelope`` da' loro l'effetto
+    che hanno solo li' (le traversate). La rimozione si offre solo sugli
+    orderings dello stesso blocco: quelli ereditati dal documento valgono per
+    tutti gli stream, e toglierli da qui non e' un rimedio locale."""
+    spath = tuple(fix.get("sweep") or ())
+    out: List[types.CodeAction] = []
+    if fix.get("remove"):
+        action = _remove_key_action(doc, uri, spath + ("orderings",), diag)
+        if action:
+            out.append(action)
+    title = "Passa a 'mode: envelope' (gli orderings sono traversate)"
+    mode = doc.entry(spath + ("mode",))
+    if mode is not None and mode.kind == "scalar":
+        out.append(_action(title, uri, [_edit(mode.value_span, "envelope")],
+                           types.CodeActionKind.QuickFix, [diag]))
+    else:
+        action = _insert_first_key(doc, uri, spath, "mode: envelope", title, diag)
+        if action:
+            out.append(action)
     return out
 
 

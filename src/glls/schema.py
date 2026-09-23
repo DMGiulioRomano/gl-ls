@@ -684,12 +684,19 @@ _AXIS_KEYS = [
 ] + _ENV_KEYS
 
 _SWEEP_KEYS = [
-    _k("mode", "discrete | envelope | both (default discrete).", values=EI.SWEEP_MODES),
+    _k("mode", "discrete | envelope | both (default discrete). Il ramo "
+               "`discrete` legge solo `orders`: gli `orderings` sono "
+               "traversate temporali e hanno effetto solo in `envelope` (e "
+               "nella meta' envelope di `both`).", values=EI.SWEEP_MODES),
     _k("plateau", "Secondi di ascolto stabile per valore (default 5.0)."),
     _k("transition", "Secondi di transizione tra plateau (default 5.0)."),
-    _k("orders", "Ordini da generare: 1 = un asse alla volta, 2 = coppie, ..."),
+    _k("orders", "Ordini da generare: 1 = un asse alla volta, 2 = coppie, ... "
+                 "Assente: `[1..n]`, ma `[]` se `orderings` e' popolato."),
     _k("orderings", "Permutazioni esplicite: primo = asse lento (outer), "
-                    "ultimo = veloce (inner)."),
+                    "ultimo = veloce (inner). Sono traversate temporali: in "
+                    "`mode: discrete` (il default) non hanno effetto, e con "
+                    "`orders` assente lo azzerano — `orders` diventa `[]` e lo "
+                    "sweep non genera nessuna variante."),
     _k("stream_id", "(interno) id stream impostato dal resolver.", kind="internal"),
 ]
 

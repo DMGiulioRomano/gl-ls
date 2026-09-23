@@ -937,6 +937,65 @@ def _check_sweep(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath) -> None
                     code="orders-redundant",
                     data={"fix": {"kind": "remove-key",
                                   "path": list(spath + ("orders",))}})
+    _check_orderings_discrete(bag, doc, spath, sweep)
+
+
+def _has_orderings(orderings: Any) -> bool:
+    """``orderings`` popolato: almeno una voce non vuota. ``orderings: []`` e'
+    la forma con cui uno stream spegne le traversate, e non conta."""
+    return (isinstance(orderings, list)
+            and any(isinstance(o, list) and o for o in orderings))
+
+
+def _check_orderings_discrete(bag: Bag, doc: Document, spath: KeyPath,
+                              sweep: Dict[str, Any]) -> None:
+    """``orderings`` sotto ``mode: discrete``: senza effetto, e con ``orders``
+    assente la generazione a zero (gl-ls #48).
+
+    Due regole del runtime che, prese una alla volta, sono giuste. La prima e'
+    di ``study_spec``: con ``orderings`` popolato e ``orders`` assente,
+    ``orders`` vale ``[]`` — chi ha scelto le combinazioni non se ne vede
+    aggiungere altre. La seconda e' di ``generate_discrete_variants``: il ramo
+    discrete legge solo ``orders``, perche' gli orderings sono traversate
+    *temporali* e vivono nel ramo envelope. Insieme, in ``mode: discrete`` — il
+    default — lo sweep non genera niente, e nessuno lo dice.
+
+    Il runtime valida il documento *merged* per stream: un override che passa a
+    ``discrete`` eredita gli orderings del documento. Lo stream pero' parla
+    solo se tocca la coppia (``mode`` o ``orderings``); altrimenti il rilievo
+    e' del documento, e l'ha gia' avuto."""
+    in_stream = spath[:1] == ("streams",)
+    if in_stream:
+        if "mode" not in sweep and "orderings" not in sweep:
+            return
+        doc_sweep = doc.get(("sweep",))
+        eff = {**doc_sweep, **sweep} if isinstance(doc_sweep, dict) else dict(sweep)
+    else:
+        eff = sweep
+    if eff.get("mode", "discrete") != "discrete" or not _has_orderings(
+            eff.get("orderings")):
+        return
+    own_orderings = "orderings" in sweep
+    site = spath + (("orderings",) if own_orderings else ("mode",))
+    label = (f"streams['{spath[1]}'].sweep" if in_stream else "sweep")
+    come = "mode: discrete" if "mode" in eff else "mode: discrete (il default)"
+    if "orders" in eff:
+        msg = (f"{label}: gli 'orderings' sotto '{come}' non hanno effetto — "
+               "il ramo discrete legge solo 'orders', e le varianti le "
+               "generano solo quelli. Gli orderings sono traversate temporali: "
+               "per quelle usa 'mode: envelope' (o 'both'), altrimenti toglili.")
+    else:
+        msg = (f"{label}: gli 'orderings' sotto '{come}' non hanno effetto, e "
+               "con 'orders' assente lo azzerano — con 'orderings' popolato "
+               "'orders' vale [], quindi lo sweep non genera nessuna variante, "
+               "in silenzio. Gli orderings sono traversate temporali: per "
+               "quelle usa 'mode: envelope' (o 'both'); per le varianti "
+               "discrete togli 'orderings' (orders torna a [1..n]) o dichiara "
+               "'orders'.")
+    bag.add(site, msg, types.DiagnosticSeverity.Warning,
+            code="orderings-discrete",
+            data={"fix": {"kind": "orderings-discrete", "sweep": list(spath),
+                          "remove": own_orderings}})
 
 
 def _check_stack(bag: Bag, doc: Document, m: StudyModel, prefix: KeyPath) -> None:
