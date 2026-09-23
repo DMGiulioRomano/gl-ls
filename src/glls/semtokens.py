@@ -51,6 +51,11 @@ def _classify_key(path, ctx: str, name: str) -> Optional[int]:
     # resta col colore del YAML
     if ctx == "root" and schema.is_private_key(name):
         return None
+    # ``for_each``: la riservata come le altre riservate, i path come i path
+    # puntati di ``over``
+    if ctx == "for_each":
+        return (_T["keyword"] if name in schema.FOR_EACH_RESERVED
+                else _T["property"])
     # ``let``, ``axes``/``axis`` e ``stack`` tengono lo stesso colore ovunque
     # compaiano come chiave del linguaggio; dentro ``let:`` e ``streams:`` i
     # nomi sono liberi (una manopola o uno stream di nome ``stack`` resta tale).

@@ -217,6 +217,23 @@ def _complete_key(doc: yamlpos.Document, m: StudyModel,
             if label not in present:
                 items.append(_item(label, doc_md, types.CompletionItemKind.Reference,
                                    snippet=snip, sort="3"))
+    elif ctx == "for_each":
+        # gli assi esterni sono path nel documento: i parametri engine sotto
+        # ``base.`` sono i piu' probabili, e scriverli a memoria e' dove si
+        # dimentica il prefisso
+        for dotted in EI.AXIS_PATHS:
+            path_key = "base." + dotted
+            if path_key in present:
+                continue
+            info = EI.PARAMS[dotted]
+            items.append(_item(
+                path_key,
+                f"Asse esterno su `{path_key}`: una cartella per valore. "
+                f"{info.doc} — {EI.bounds_phrase(info)}",
+                types.CompletionItemKind.Reference,
+                snippet=f"{path_key}: [${{1}}]",
+                sort="3",
+            ))
     elif ctx == "spread":
         # 'n' nel tempo: la forma si scrive in fretta ma la conseguenza (il
         # gate sul volume) non si indovina — vale uno snippet suo

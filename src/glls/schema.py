@@ -334,6 +334,30 @@ SPREAD_N_ENV_DOC = (
     "proprio, usa `n` scalare e scrivi gli envelope in `over.base.volume`."
 )
 
+# ``for_each:`` (granstudies ``for_each.py``): una batteria di cartelle, una per
+# combinazione. La cosa da dire subito e' che le sue chiavi non sono nomi
+# liberi: ``coppia`` e' riservata, ogni altra e' un path nel documento.
+FOR_EACH_DOC = (
+    "**Una cartella per combinazione.** Ogni chiave e' un asse esterno allo "
+    "studio, e il prodotto cartesiano dei suoi stati genera una cartella per "
+    "combinazione, con label `k=v__k=v`.\n\n"
+    "- `coppia` e' **riservata**: i suoi stati sono patch sul documento, non "
+    "valori di una variabile nel senso ordinario;\n"
+    "- ogni altra chiave e' un **path puntato dentro il documento** "
+    "(`base.pitch.range`, `base.pointer.offset_range`), non un nome libero: "
+    "si valida segmento per segmento come la forma annidata equivalente, e "
+    "i suoi valori finiscono li'. Un nome d'asse (`density`) non e' un path: "
+    "il path e' `base.density` o `axes.density.<chiave>`."
+)
+COPPIA_DOC = (
+    "**Chiave riservata di `for_each:`**, come `onset`/`duration`/`chunk` in "
+    "`versions:`: non e' un path del documento. I suoi **stati sono patch sul "
+    "documento** — ognuno riscrive le chiavi che nomina — e il contenuto di una "
+    "patch non si confronta col vocabolario di un contesto dello studio."
+)
+# Le chiavi di ``for_each:`` che non sono path nel documento.
+FOR_EACH_RESERVED = ("coppia",)
+
 # Chiavi private al root (gl-ls #48): convenzione dei magazzini di valori
 # (``_assi:``) riusati via alias YAML. La pipeline le ignora, e il sottoalbero
 # non appartiene al linguaggio: nessun contesto da cui leggere un vocabolario.
@@ -655,6 +679,12 @@ _ROOT_KEYS = [
        kind="keyword"),
     _k("let", _LET_DOC_DOCUMENT, kind="keyword",
        snippet="let:\n  ${1:manopola}: ${2:valore}"),
+    _k("for_each", FOR_EACH_DOC, kind="keyword",
+       snippet="for_each:\n  ${1:base.distribution}: [${2:0}, ${3:1}]"),
+]
+
+_FOR_EACH_KEYS = [
+    _k("coppia", COPPIA_DOC, kind="keyword"),
 ]
 
 _AXES_RESERVED = [
@@ -844,6 +874,7 @@ CONTEXTS: Dict[str, List[Key]] = {
     "spread_strategy": _SPREAD_STRATEGY_KEYS,
     "gain_compensation": _GAIN_COMPENSATION_KEYS,
     "percorso": [],                  # schema interno non modellato: nomi liberi
+    "for_each": _FOR_EACH_KEYS,      # + path puntati nel documento
     "private": [],                   # sottoalbero di una chiave privata
     "let": [],
     "value": [],
@@ -1010,6 +1041,10 @@ def context_for_path(path: KeyPath, axis_names=frozenset()) -> str:
         # questo ramo ``("_assi",)`` ricadeva sul contesto ``root`` e i suoi
         # figli venivano confrontati con le chiavi del documento.
         return "private"
+    if head == "for_each":
+        # le chiavi sono path (validati da ``_check_for_each``) o la riservata
+        # ``coppia``, i cui stati sono patch: sotto, niente vocabolario
+        return "for_each" if len(path) == 1 else "value"
     if head == "streams":
         if len(path) == 1:
             return "streams"

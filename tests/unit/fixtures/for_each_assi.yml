@@ -1,0 +1,65 @@
+# Ricostruzione della *forma* dello study.yml dello studio 001-41 (gl-ls #48):
+# le scritture che producevano gli 11 falsi positivi, non i numeri dello
+# studio. Blocco privato `_assi:` riusato via alias, `distribution_mode` nel
+# base, `for_each:` con la chiave riservata `coppia` e quattro assi esterni
+# che sono path puntati dentro il documento.
+study_id: s001_41
+title: "001-41"
+seed: 41
+samples_dir: samples
+
+# Magazzino dei values: la pipeline ignora le chiavi che iniziano con '_',
+# qui stanno solo per essere riusate via alias YAML.
+_assi:
+  duration: &ax_duration [0.002, 0.005, 0.01, 0.02]
+  pitch: &ax_pitch [-12, -7, 0, 7, 12]
+  speed: &ax_speed [0.25, 0.5, 1, 2]
+  fill_factor: &ax_fill [0.5, 1, 2, 4]
+
+base:
+  onset: 0
+  duration: 20
+  sample: corpus.wav
+  time_mode: normalized
+  distribution_mode: gaussian
+  grain:
+    envelope: hanning
+    duration: 0.01
+  pointer:
+    loop_unit: normalized
+    loop_start: 0.1
+    loop_end: 0.363636363636
+  pitch:
+    semitones: 0
+
+axes:
+  grain.duration:
+    baseline: 0.01
+    values: *ax_duration
+  pitch.semitones:
+    baseline: 0
+    values: *ax_pitch
+  pointer.speed_ratio:
+    baseline: 1
+    values: *ax_speed
+  fill_factor:
+    baseline: 2
+    values: *ax_fill
+
+sweep:
+  mode: discrete
+  plateau: 5
+  transition: 2.5
+
+for_each:
+  coppia:
+    corta:
+      base.pointer.loop_start: 0.1
+      base.pointer.loop_end: 0.2
+    lunga:
+      base.pointer.loop_start: 0.1
+      base.pointer.loop_end: 0.363636363636
+  base.distribution: [0, 0.5, 1]
+  base.pointer.offset_range: [0, 0.1]
+  base.grain.duration_range: [0, 0.005]
+  base.pitch.range: [0, 1]

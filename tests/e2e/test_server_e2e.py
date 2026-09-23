@@ -475,3 +475,79 @@ def test_dotted_over_semantic_tokens_present(client):
     toks = client.request("textDocument/semanticTokens/full",
                           {"textDocument": {"uri": uri}})
     assert toks and len(toks["data"]) % 5 == 0
+
+
+# --- gl-ls #48: la sintassi nuova dello study.yml -----------------------------
+
+STUDY_48 = """study_id: s001_41
+samples_dir: samples
+_assi:
+  pitch: &ax_pitch [-12, 0, 12]
+base:
+  onset: 0
+  duration: 20
+  sample: corpus.wav
+  distribution_mode: gaussian
+  pointer:
+    loop_unit: normalized
+    loop_start: 0.1
+    loop_end: 0.363636363636
+axes:
+  pitch.semitones:
+    baseline: 0
+    values: *ax_pitch
+for_each:
+  coppia:
+    a: {base.pointer.loop_end: 0.2}
+  base.distribution: [0, 0.5, 1]
+  base.pitch.range: [0, 1]
+"""
+
+
+def _study_dir(tmp_path):
+    """Un repo di studi vero: ``samples/`` alla root, lo study due livelli
+    sotto. Il sample dura 5.5 s, la ``duration`` dello stream 20: l'hint deve
+    leggere il primo."""
+    import wave
+
+    (tmp_path / "samples").mkdir()
+    with wave.open(str(tmp_path / "samples" / "corpus.wav"), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(1000)
+        w.writeframes(b"\x00\x00" * 5500)
+    d = tmp_path / "studies" / "001-41"
+    d.mkdir(parents=True)
+    path = d / "study.yml"
+    path.write_text(STUDY_48)
+    return path
+
+
+def test_sintassi_48_senza_falsi_positivi(client, tmp_path):
+    uri = _study_dir(tmp_path).as_uri()
+    assert client.open(uri, STUDY_48) == []
+
+
+def test_inlay_secondi_reali_del_loop_normalizzato(client, tmp_path):
+    uri = _study_dir(tmp_path).as_uri()
+    client.open(uri, STUDY_48)
+    hints = client.request("textDocument/inlayHint", {
+        "textDocument": {"uri": uri},
+        "range": {"start": {"line": 0, "character": 0},
+                  "end": {"line": 40, "character": 0}},
+    })
+    rows = STUDY_48.split("\n")
+    by_line = {rows[h["position"]["line"]].strip(): h["label"] for h in hints}
+    assert by_line["loop_end: 0.363636363636"] == "≈ 2.00 s"
+    assert by_line["a: {base.pointer.loop_end: 0.2}"] == "≈ 1.10 s"
+
+
+def test_hover_secondi_reali_del_loop_normalizzato(client, tmp_path):
+    uri = _study_dir(tmp_path).as_uri()
+    client.open(uri, STUDY_48)
+    line = STUDY_48.split("\n").index("    loop_end: 0.363636363636")
+    h = client.request("textDocument/hover", {
+        "textDocument": {"uri": uri},
+        "position": {"line": line, "character": 16},
+    })
+    assert "2.00 s" in h["contents"]["value"]

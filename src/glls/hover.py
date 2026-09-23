@@ -129,6 +129,8 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
 
     if ctx == "root" and schema.is_private_key(name):
         return _md(f"**`{name}`** — {schema.PRIVATE_DOC}", rng)
+    if ctx == "for_each" and name not in schema.FOR_EACH_RESERVED:
+        return _hover_for_each_axis(m, str(name), rng)
 
     # nomi dinamici: assi e stream
     if ctx == "axes" and name not in AXES_RESERVED:
@@ -205,6 +207,18 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
     if group is not None:
         text += (f"\n\nValore in **BP group** — {group}.\n\n"
                  + schema.BP_GROUP_DOC)
+    return _md(text, rng)
+
+
+def _hover_for_each_axis(m: StudyModel, key: str,
+                         rng: Optional[types.Range]) -> types.Hover:
+    """Hover di un asse esterno di ``for_each:``: il nome e' un path."""
+    text = (f"**Asse esterno di `for_each`** — il nome e' un **path nel "
+            f"documento**: ogni stato finisce in `{key}`, una cartella per "
+            f"combinazione (label `{key}=<valore>`, unite da `__`).")
+    dotted = key[len("base."):] if key.startswith("base.") else None
+    if dotted in EI.PARAMS:
+        text += _bounds_line(dotted, m.loop_unit_for())
     return _md(text, rng)
 
 
