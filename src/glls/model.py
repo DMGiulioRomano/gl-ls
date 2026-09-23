@@ -190,6 +190,33 @@ class StudyModel:
                 or self.replica_duration_source is not None
                 or self.has_top_duration)
 
+    # ---- chiavi del blocco engine, per stream ---------------------------
+    # Come per la durata: l'override di una entry (annidato o puntato) vince
+    # sul ``base:`` di documento, che e' il default di tutti.
+
+    def _engine_value(self, stream: Optional[str], segs: Tuple[str, ...]) -> Any:
+        if stream is not None:
+            si = self.streams.get(stream)
+            if si is not None:
+                v = lookup(si.cfg, ("base",) + segs, _MISSING)
+                if v is not _MISSING:
+                    return v
+        data = self.doc.data if isinstance(self.doc.data, dict) else {}
+        return lookup(data, ("base",) + segs)
+
+    def loop_unit_for(self, stream: Optional[str] = None) -> Optional[str]:
+        """``pointer.loop_unit`` in vigore per uno stream (o per il documento).
+
+        None se non dichiarata — cioe' ``seconds``, da PGE v9 senza piu'
+        ereditarieta' da ``time_mode`` — o se non e' una stringa."""
+        v = self._engine_value(stream, ("pointer", "loop_unit"))
+        return v if isinstance(v, str) else None
+
+    def sample_for(self, stream: Optional[str] = None) -> Optional[str]:
+        """Il ``sample`` in vigore per uno stream (o per il documento)."""
+        v = self._engine_value(stream, ("sample",))
+        return v if isinstance(v, str) else None
+
     def sweep_counts(self) -> Optional[Dict[int, int]]:
         """{ordine: numero varianti} per gli orders dichiarati (se calcolabile)."""
         from math import comb
@@ -213,6 +240,30 @@ class StudyModel:
                 counts[o] = comb(n, o)
         return counts or None
 
+
+
+_MISSING = object()
+
+
+def lookup(node: Any, segs: Tuple[str, ...], default: Any = None) -> Any:
+    """Il valore a ``segs`` dentro ``node``, in qualunque grafia.
+
+    Negli override e nelle patch la stessa chiave si scrive annidata
+    (``base: {pointer: {loop_unit: x}}``), puntata (``base.pointer.loop_unit:
+    x``) o a meta' (``base: {pointer.loop_unit: x}``): il runtime le espande
+    tutte nella stessa forma (``_expand_dotted_keys``). Qui si provano tutti i
+    modi di raggruppare i segmenti, il piu' lungo prima."""
+    if not segs:
+        return node
+    if not isinstance(node, dict):
+        return default
+    for j in range(len(segs), 0, -1):
+        key = ".".join(segs[:j])
+        if key in node:
+            found = lookup(node[key], segs[j:], _MISSING)
+            if found is not _MISSING:
+                return found
+    return default
 
 
 def split_over_key(key: Any, value: Any) -> Optional[Tuple[str, str]]:
