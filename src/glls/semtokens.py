@@ -46,6 +46,10 @@ _EXPR_TOKEN = re.compile(r"(?P<num>\d+(?:\.\d+)?)|(?P<name>[A-Za-z_]\w*)|(?P<op>
 
 
 def _classify_key(path, ctx: str, name: str) -> Optional[int]:
+    # un magazzino privato (``_assi:``) non e' una sezione del linguaggio:
+    # resta col colore del YAML
+    if ctx == "root" and schema.is_private_key(name):
+        return None
     # ``let``, ``axes``/``axis`` e ``stack`` tengono lo stesso colore ovunque
     # compaiano come chiave del linguaggio; dentro ``let:`` e ``streams:`` i
     # nomi sono liberi (una manopola o uno stream di nome ``stack`` resta tale).

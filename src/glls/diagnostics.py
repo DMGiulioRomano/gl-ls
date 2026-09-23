@@ -2163,9 +2163,11 @@ def _check_loop_unit(bag: Bag, doc: Document) -> None:
     base_ptr = base.get("pointer") if isinstance(base.get("pointer"), dict) else {}
     streams = data.get("streams") if isinstance(data.get("streams"), dict) else {}
     # Le posizioni dichiarate fuori dagli stream (spread globale, versions,
-    # percorso) valgono per tutti, come il base.
+    # percorso) valgono per tutti, come il base. Il magazzino privato no: la
+    # pipeline non lo legge.
     puntate_doc = _dotted_positions(
-        {k: v for k, v in data.items() if k != "streams"})
+        {k: v for k, v in data.items()
+         if k != "streams" and not schema.is_private_key(k)})
     # ``streams:`` assente = un solo stream, quello del base (resolve_streams).
     voci = list(streams.items()) or [(None, {})]
     visti: set = set()
@@ -2362,6 +2364,9 @@ def _check_unknown_keys(bag: Bag, doc: Document, m: StudyModel) -> None:
         allowed = [k.name for k in schema.keys_for(ctx)]
         for key in value:
             if not isinstance(key, str) or key in allowed:
+                continue
+            # magazzino privato al root (``_assi:``): la pipeline lo ignora
+            if not entry.path and schema.is_private_key(key):
                 continue
             # i contesti env/axis condividono il vocabolario banda: gia' coperti
             if ctx == "walk" or (ctx == "axis" and key in ("rand", "cps")):
@@ -2663,6 +2668,10 @@ def _check_expr_nodes(bag: Bag, doc: Document, m: StudyModel) -> None:
         if len(p) >= 3 and p[0] == "streams" and p[2] == "spread":
             continue
         if p and p[0] == "spread":
+            continue
+        # il magazzino privato non si valuta: un nome li' dentro e' in scope
+        # solo dove l'alias lo porta, e li' la expr si valuta gia'
+        if p and schema.is_private_key(p[0]):
             continue
         # slot strutturali di un asse (baseline, values[i]): un nodo-expr li'
         # non e' ammesso *a prescindere* dal fatto che l'espressione regga —

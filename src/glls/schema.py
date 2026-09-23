@@ -334,6 +334,24 @@ SPREAD_N_ENV_DOC = (
     "proprio, usa `n` scalare e scrivi gli envelope in `over.base.volume`."
 )
 
+# Chiavi private al root (gl-ls #48): convenzione dei magazzini di valori
+# (``_assi:``) riusati via alias YAML. La pipeline le ignora, e il sottoalbero
+# non appartiene al linguaggio: nessun contesto da cui leggere un vocabolario.
+PRIVATE_PREFIX = "_"
+PRIVATE_DOC = (
+    "**Chiave privata** (prefisso `_`): la pipeline la ignora, e gl-ls non "
+    "valida ne' lei ne' il suo sottoalbero. E' la convenzione dei magazzini di "
+    "valori — `_assi:` — che tengono i `values` in un posto solo per riusarli "
+    "via alias YAML (`&ax_duration` / `*ax_duration`). Cio' che l'alias porta "
+    "altrove si valida li', dove e' letto."
+)
+
+
+def is_private_key(name: object) -> bool:
+    """True per una chiave privata al root: stringa col prefisso ``_``."""
+    return isinstance(name, str) and name.startswith(PRIVATE_PREFIX)
+
+
 _LET_DOC_SPREAD = (
     "**Manopole di voce.** Blocco `let:` dentro `spread:`, accanto a `n`/`over`: "
     "un valore pescato/derivato per stream generato. Solo `expr` (con `i`/`n`) e "
@@ -793,6 +811,7 @@ CONTEXTS: Dict[str, List[Key]] = {
     "spread_strategy": _SPREAD_STRATEGY_KEYS,
     "gain_compensation": _GAIN_COMPENSATION_KEYS,
     "percorso": [],                  # schema interno non modellato: nomi liberi
+    "private": [],                   # sottoalbero di una chiave privata
     "let": [],
     "value": [],
 }
@@ -953,6 +972,11 @@ def context_for_path(path: KeyPath, axis_names=frozenset()) -> str:
     if not path:
         return "root"
     head = path[0]
+    if is_private_key(head):
+        # magazzino privato: fuori dal linguaggio, nessun vocabolario. Senza
+        # questo ramo ``("_assi",)`` ricadeva sul contesto ``root`` e i suoi
+        # figli venivano confrontati con le chiavi del documento.
+        return "private"
     if head == "streams":
         if len(path) == 1:
             return "streams"

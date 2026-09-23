@@ -122,6 +122,9 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
     parent = path[:-1]
     ctx = schema.context_for_path(parent, frozenset(m.axes))
 
+    if ctx == "root" and schema.is_private_key(name):
+        return _md(f"**`{name}`** — {schema.PRIVATE_DOC}", rng)
+
     # nomi dinamici: assi e stream
     if ctx == "axes" and name not in AXES_RESERVED:
         return _md(_axis_summary(m, str(name)), rng)
