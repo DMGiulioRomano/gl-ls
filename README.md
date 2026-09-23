@@ -58,6 +58,20 @@ Language server (LSP) per il **linguaggio di granulazione** degli
   di `DISCONTINUITY_OFFSET` in silenzio e gl-ls avvisa;
 - **`versions:` ad assi ortogonali**: discriminatore Forma 1 (manopole
   co-varianti) / Forma 2 (stati nominati) e segnalazione degli assi misti;
+- **`for_each:`** (una cartella per combinazione, label `k=v__k=v`): `coppia`
+  e' riservata — i suoi stati sono patch sul documento — e ogni altra chiave e'
+  un **path puntato dentro il documento**, validato segmento per segmento come
+  la forma annidata (`base.pich.range` -> «forse `base.pitch.range`?», un
+  `distribution` senza `base.` -> «forse `base.distribution`?», un path verso
+  una chiave vietata come `duration` top-level); i valori numerici di un
+  parametro engine si confrontano coi suoi bounds;
+- **chiavi private al root** (`_assi:`, prefisso `_`): i magazzini di valori
+  riusati via alias YAML non si validano, ne' loro ne' il sottoalbero — cio'
+  che l'alias porta altrove si valida dove e' letto;
+- **`sweep.orderings` sotto `mode: discrete`** (il default): gli orderings
+  sono traversate temporali e il ramo discrete non li legge; con `orders`
+  assente valgono `orders: []`, e lo sweep non genera niente in silenzio.
+  Warning con due quick fix: togli gli orderings o passa a `mode: envelope`;
 - guardia anti-runaway: stima dei breakpoint della camminata-X (> 10000 = errore
   a runtime);
 - **superficie PGE v7-v9**: `pointer.loop_unit` non eredita piu' da
@@ -75,6 +89,9 @@ Language server (LSP) per il **linguaggio di granulazione** degli
   alias, quick fix di rinomina), la chiave **scritta e lasciata vuota** e'
   jitter implicito all'1% e non «assente», e da PGE v8 un corpo che non si
   costruisce come envelope e' errore invece di ricadere su un gate al 100%;
+- **la banda dei `_range`** (PGE v9): `distribution_mode` (`uniform` |
+  `gaussian`) e `range_anchor` (`center` | `min`) a vocabolario chiuso — e
+  `distribution_mode` non e' piu' scambiata per `distribution`;
 - blocco pitch unit-driven, finestre sconosciute, `reverse: true`,
   `loop_end <= loop_start`, `curve` con `type: step`, tempi di banda fuori [0,1]...
 
@@ -114,8 +131,10 @@ legenda dei posizionali di una manopola in forma compatta a cicli.
 **E ancora**: semantic tokens (sezioni, nomi d'asse, marcatori di banda, enum,
 espressioni expr tokenizzate); outline del documento; **inlay hint** con la
 banda convertita nell'altra unita', il **duty factor** (`density ×
-grain.duration`) e il riassunto di una forma compatta (`4 cicli · vertice 25% ·
-wrap`); legenda dei posizionali di un BP group (`3 punti · cubic · t 0–1
+grain.duration`), il riassunto di una forma compatta (`4 cicli · vertice 25% ·
+wrap`) e, sotto `loop_unit: normalized`, i **secondi reali** delle posizioni nel
+sample (`loop_end: 0.363636  ≈ 2.00 s`) — sulla durata del *sample*, letta
+dall'header del file (wav, aiff, flac), non su `base.duration`; legenda dei posizionali di un BP group (`3 punti · cubic · t 0–1
 (assoluti)`) con snippet per scriverlo; **code lens** con le varianti sweep per
 ordine, la durata
 stimata, i breakpoint stimati d'ogni camminata e gli stream generati da ogni
@@ -158,6 +177,8 @@ src/glls/
 ├── hover.py · semtokens.py · symbols.py · inlay.py · lens.py
 ├── actions.py      # code action di ricalcolo e quick fix
 ├── navigation.py   # definition/references assi, link ai sample
+├── positions.py    # posizioni nel sample: unita' in vigore e secondi reali
+├── audioinfo.py    # durata di un file audio dall'header (solo stdlib)
 └── server.py       # wiring pygls
 ```
 

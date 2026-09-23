@@ -169,6 +169,45 @@ Tre strati, tutti puri e testabili senza LSP:
     dello studio, non dell'engine — le fasi si misurano sul tempo dello stream,
     non su quello del file audio.
 
+- **Un contesto che lo schema non conosce non e' il `root`** (gl-ls #48). Il
+  ripiego di `context_for_path` per una chiave top-level ignota e' il contesto
+  `root`, e i figli di quella chiave venivano quindi confrontati col
+  vocabolario del documento: sullo studio 001-41 undici warning, tutti falsi —
+  i figli di `_assi:` fino a suggerire `speed` -> `seed`, e i path di
+  `for_each:` letti come chiavi del documento. I due blocchi hanno ora un
+  contesto proprio, e nessuno dei due e' chiuso:
+  - una chiave **privata** (prefisso `_`, solo al root) apre il contesto
+    `private`, senza vocabolario, e resta fuori anche dalle regole che
+    percorrono il documento intero (nodi-expr, posizioni puntate del rilievo
+    su `loop_unit`). Il magazzino e' fatto per essere riusato via alias: cio'
+    che l'alias porta in `axes:` si valida li', dove e' letto;
+  - le chiavi di **`for_each:`** sono path, non nomi: si validano con la stessa
+    macchina delle chiavi puntate degli override (`_unknown_segment`, il
+    contesto della forma annidata segmento per segmento, col confine dei nomi
+    d'asse dotted), a partire dal `root` invece che da una entry di
+    `streams:`. Lo schema conosce anche chiavi che il documento non accetta
+    piu' (`duration` top-level, `dephase`) per poterle spiegare, quindi un path
+    che ci arriva regge segmento per segmento e va fermato a parte. La
+    riservata `coppia` no: i suoi stati sono patch sul documento, e la forma di
+    una patch e' del runtime — un vocabolario indovinato qui sarebbe
+    esattamente il falso positivo da cui si partiva.
+- **Una posizione normalizzata si legge sulla durata del sample** (gl-ls #48).
+  Sotto `loop_unit: normalized` `start`/`loop_*` sono frazioni della durata del
+  *sample* — non della `duration` dello stream, che e' il riferimento
+  dell'asse X degli envelope: `granstudies.gainmap` fa la stessa distinzione
+  (`start * n_frames` contro `start * sr`), e confonderle darebbe un numero
+  plausibile e falso. L'unita' in `engine_info` e' quindi una funzione di
+  `loop_unit` (`info_for`), e l'inlay/l'hover dicono i secondi reali leggendo
+  la durata dall'header del file (`audioinfo`: RIFF/RF64, AIFF/AIFC, FLAC, solo
+  stdlib — `wave` rifiuta i WAV float, `aifc` non c'e' piu' da Python 3.13, e
+  `soundfile` costerebbe la scelta standalone). Sample e `loop_unit` si
+  risolvono per stream come la durata (override > `base:`), e una patch di
+  `coppia` vale per i valori scritti accanto; se il documento riscrive
+  `base.sample` anche altrove (for_each, spread, versions) il sample di una
+  lettura e' uno dei possibili, e l'etichetta lo nomina invece di tacerlo.
+  Senza file (buffer non salvato, sample assente) nessun numero: meglio
+  nessuna risposta che una durata indovinata.
+
 ## Limiti noti
 
 - La conversione unit non tratta i nodi generatore annidati dentro
@@ -176,8 +215,11 @@ Tre strati, tutti puri e testabili senza LSP:
 - Il riscala della duration tocca gli envelope in forma lista e dict
   (`points`, con `time_mode` locale rispettato) e l'`end_time` dei compatti;
   non i `values` di spread (semantica ambigua).
-- I bounds dinamici dell'engine (`loop_* <= sample_dur`) non sono verificati
-  (servirebbe leggere il file audio). Da PGE v5.1.0 `pge.api.parameter_bounds()`
+- I bounds dinamici dell'engine (`loop_* <= sample_dur`) non sono verificati.
+  La durata del sample gl-ls ora la sa leggere (la usa l'inlay delle posizioni
+  normalizzate), ma la diagnostica guarda il documento e basta: una regola che
+  dipende da un file che cambia senza che il documento cambi darebbe errori
+  che nessuna modifica al testo spiega. Da PGE v5.1.0 `pge.api.parameter_bounds()`
   li espone gia' risolti, ma dipenderne costerebbe la scelta standalone e non
   chiuderebbe il drift che conta: i bounds che questi `study.yml` devono
   rispettare sono quelli di granstudies, che sull'engine ne stringe due
@@ -207,6 +249,11 @@ Tre strati, tutti puri e testabili senza LSP:
   elementi con `end_time` numero e `n_reps` intero per la compatta, 2 elementi
   con lista di punti e stringa per il gruppo — e una forma che non ricade in
   nessuno dei due passa senza diagnostica invece di essere indovinata.
+
+- Il contenuto degli stati di `coppia` (`for_each:`) non si valida: sono patch
+  sul documento e la loro forma e' del runtime. Dei valori degli assi esterni
+  si confrontano coi bounds solo i numeri nudi di una lista (o di `values:`);
+  le altre forme passano senza giudizio.
 
 ## Estendere
 
