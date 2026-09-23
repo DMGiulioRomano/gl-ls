@@ -365,6 +365,15 @@ SWEEP_MODES = ["discrete", "envelope", "both"]
 DISTRIBUTIONS = ["uniform", "gaussian"]
 TIME_MODES = ["absolute", "normalized"]
 CLIP_STRATEGIES = ["overflow_margin", "passthrough"]
+# La banda dei ``_range`` (``StreamConfig`` di PGE v9, ``docs/reference/yaml.md``
+# «La banda dei ``_range``»): due assi ortogonali, entrambi a vocabolario
+# chiuso. ``distribution_mode`` e' la *forma* (``DistributionFactory.modes()``,
+# fuori di qui ``StrategyNotFoundError``) e omonima per caso della
+# ``distribution`` di una banda di studio, che pesca da un altro vocabolario;
+# ``range_anchor`` e' dove cade il valore base dentro la banda
+# (``RANGE_ANCHORS``, fuori di qui ``InvalidFieldValueError``).
+DISTRIBUTION_MODES = ["uniform", "gaussian"]
+RANGE_ANCHORS = ["center", "min"]
 # Unita' di ``grain.duration``/``grain.duration_range``
 # (``pge.core.stream.GRAIN_DURATION_UNITS``, granstudies
 # ``bounds.GRAIN_DURATION_UNITS``). ``milliseconds`` entra con PGE v5.2.0.

@@ -352,6 +352,29 @@ def is_private_key(name: object) -> bool:
     return isinstance(name, str) and name.startswith(PRIVATE_PREFIX)
 
 
+# ``distribution_mode`` / ``range_anchor`` (``StreamConfig`` dell'engine, PGE
+# v9): la banda dei ``_range``. Due assi ortogonali, e nessuno dei due e' la
+# ``distribution`` di Truax — che e' la chiave con cui l'editor la confondeva.
+DISTRIBUTION_MODE_DOC = (
+    "**Forma della banda dei `_range`**: `uniform` (default, piatta) | "
+    "`gaussian` (troncata, sigma = larghezza/6, picco al centro della banda). "
+    "Dice *come* la banda si riempie, non quanto e' larga (quello e' il valore "
+    "del `_range`) ne' dove cade il valore base (quello e' `range_anchor`).\n\n"
+    "Non e' `distribution`: quella e' il modello di Truax (0 = sincrono, 1 = "
+    "asincrono), sull'emissione dei grani. Fuori vocabolario l'engine alza "
+    "`StrategyNotFoundError`."
+)
+RANGE_ANCHOR_DOC = (
+    "**Ancora della banda dei `_range`**: `center` (default, banda "
+    "`[base - range/2, base + range/2]`) | `min` (banda `[base, base + range]`: "
+    "base e' il minimo). Governa i `_range` che passano da `Parameter` — "
+    "`volume_range`, `pan_range`, `grain.duration_range`, "
+    "`pointer.offset_range`, `pitch.range` — non il jitter implicito ne' lo "
+    "spread delle voci. Con `min` il tetto della banda puo' sforare il massimo "
+    "del parametro: l'engine lo verifica al parse. Fuori vocabolario e' un "
+    "`InvalidFieldValueError`."
+)
+
 _LET_DOC_SPREAD = (
     "**Manopole di voce.** Blocco `let:` dentro `spread:`, accanto a `n`/`over`: "
     "un valore pescato/derivato per stream generato. Solo `expr` (con `i`/`n`) e "
@@ -411,7 +434,10 @@ _ENGINE_STREAM_KEYS = [
                   "Mutuamente esclusivo con `fill_factor` (che ha priorita')."),
     _k("fill_factor", "density = fill_factor / grain.duration. Bounds [0.001, 50]."),
     _k("distribution", "Modello Truax: 0 = sincrono, 1 = asincrono; blend lineare. "
-                       "Scalare o envelope."),
+                       "Scalare o envelope. Non e' `distribution_mode`, che e' "
+                       "la forma della banda dei `_range`."),
+    _k("distribution_mode", DISTRIBUTION_MODE_DOC, values=EI.DISTRIBUTION_MODES),
+    _k("range_anchor", RANGE_ANCHOR_DOC, values=EI.RANGE_ANCHORS),
     _k("volume", f"dB (default 0). Bounds [-120, {EI.VOLUME_MAX_DB:g}]. "
                  "Scalare o envelope. Sopra 0 dBFS il renderer non normalizza: "
                  "il range positivo e' clipping reale, non headroom."),

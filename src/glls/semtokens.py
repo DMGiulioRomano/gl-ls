@@ -40,6 +40,7 @@ _ENUM_VALUES = (
     set(EI.WINDOWS) | set(EI.X_UNITS) | set(EI.INTERPOLATIONS)
     | set(EI.SWEEP_MODES) | set(EI.DISTRIBUTIONS) | set(EI.TIME_MODES)
     | set(EI.CLIP_STRATEGIES) | set(EI.DURATION_UNITS) | set(EI.CHORDS)
+    | set(EI.DISTRIBUTION_MODES) | set(EI.RANGE_ANCHORS)
 )
 
 _EXPR_TOKEN = re.compile(r"(?P<num>\d+(?:\.\d+)?)|(?P<name>[A-Za-z_]\w*)|(?P<op>\*\*|[+\-*/()])")

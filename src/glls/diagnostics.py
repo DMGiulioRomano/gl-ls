@@ -1687,6 +1687,18 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
         bag.add(bpath + ("time_mode",),
                 f"time_mode '{tm}' non valido (absolute | normalized).",
                 code="bad-enum", prefer_value=True)
+    # la banda dei ``_range``: forma e ancora, due vocabolari chiusi
+    for key, vocab in (("distribution_mode", EI.DISTRIBUTION_MODES),
+                       ("range_anchor", EI.RANGE_ANCHORS)):
+        v = base.get(key)
+        if v is None or v in vocab:
+            continue
+        sug = _suggest(str(v), vocab) if isinstance(v, str) else None
+        extra = f" Forse '{sug}'?" if sug else ""
+        bag.add(bpath + (key,),
+                f"{key} '{v}' non valido ({' | '.join(vocab)}).{extra}",
+                code="bad-enum", prefer_value=True,
+                data={"fix": {"kind": "rename-value", "new": sug}} if sug else None)
     if "seed" in base:
         bag.add(bpath + ("seed",),
                 "seed per-stream: l'engine lo ignora — StreamConfig.from_yaml "
