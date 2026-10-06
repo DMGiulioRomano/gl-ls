@@ -374,9 +374,17 @@ MS_PER_SECOND = 1000.0
 
 # ---------------------------------------------------------------------------
 # Posizioni nel sample: ``pointer.loop_unit`` (engine #222, PGE v9).
+#
+# I due nomi stavano in ``controllers/pointer_controller.py``, e lo scope era
+# privato (``_LOOP_UNIT_SCOPE``). PGE #246 ha registrato che tre repository li
+# leggevano e li ha spostati in ``parameters/loop_unit.py``, un modulo senza
+# dipendenze fatto apposta per essere letto, togliendo l'underscore a cio' che
+# era privato di nome e non di fatto. Qui il mirror e' statico e nessun test
+# legge il motore, quindi lo spostamento non rompe niente: cambia il posto da
+# guardare quando questi valori vanno riconfrontati a mano.
 
 # Vocabolario chiuso di ``pointer.loop_unit``
-# (``pge.controllers.pointer_controller.LOOP_UNITS``, granstudies
+# (``pge.parameters.loop_unit.LOOP_UNITS``, granstudies
 # ``bounds.LOOP_UNITS``). ``seconds`` e' la grafia canonica — allinea
 # ``loop_unit`` a ``grain.duration_unit`` — e ``absolute`` l'alias storico:
 # stessa lettura, valori gia' in secondi assoluti. Fuori di qui l'engine alza
@@ -392,7 +400,7 @@ LOOP_UNITS = ["seconds", "absolute", "normalized"]
 LOOP_UNIT_DEFAULT = "seconds"
 
 # Le chiavi del blocco pointer che ``loop_unit`` interpreta
-# (``_LOOP_UNIT_SCOPE`` del PointerController, granstudies
+# (``pge.parameters.loop_unit.LOOP_UNIT_SCOPE``, granstudies
 # ``diagnostics.LOOP_UNIT_SCOPE``). ``start`` e' fra queste benche' loop non
 # sia: e' una posizione nel sample come ``loop_start``, stesso dominio e
 # stessa unita'.
