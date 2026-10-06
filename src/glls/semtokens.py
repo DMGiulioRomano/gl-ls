@@ -40,12 +40,22 @@ _ENUM_VALUES = (
     set(EI.WINDOWS) | set(EI.X_UNITS) | set(EI.INTERPOLATIONS)
     | set(EI.SWEEP_MODES) | set(EI.DISTRIBUTIONS) | set(EI.TIME_MODES)
     | set(EI.CLIP_STRATEGIES) | set(EI.DURATION_UNITS) | set(EI.CHORDS)
+    | set(EI.DISTRIBUTION_MODES) | set(EI.RANGE_ANCHORS)
 )
 
 _EXPR_TOKEN = re.compile(r"(?P<num>\d+(?:\.\d+)?)|(?P<name>[A-Za-z_]\w*)|(?P<op>\*\*|[+\-*/()])")
 
 
 def _classify_key(path, ctx: str, name: str) -> Optional[int]:
+    # un magazzino privato (``_assi:``) non e' una sezione del linguaggio:
+    # resta col colore del YAML
+    if ctx == "root" and schema.is_private_key(name):
+        return None
+    # ``for_each``: la riservata come le altre riservate, i path come i path
+    # puntati di ``over``
+    if ctx == "for_each":
+        return (_T["keyword"] if name in schema.FOR_EACH_RESERVED
+                else _T["property"])
     # ``let``, ``axes``/``axis`` e ``stack`` tengono lo stesso colore ovunque
     # compaiano come chiave del linguaggio; dentro ``let:`` e ``streams:`` i
     # nomi sono liberi (una manopola o uno stream di nome ``stack`` resta tale).

@@ -98,7 +98,12 @@ def references(doc: Document, m: StudyModel, uri: str, line: int,
 # ---------------------------------------------------------------------------
 
 
-def _find_samples_dir(file_dir: Optional[str], samples_dir: str) -> Optional[str]:
+def find_samples_dir(file_dir: Optional[str], samples_dir: str) -> Optional[str]:
+    """La cartella dei sample, cercata risalendo da ``file_dir``.
+
+    ``samples_dir`` e' relativo alla root del repo di studi, e lo study.yml
+    vive qualche livello sotto: si prova ogni antenato, fino a sei. La usano
+    i link ai sample e la durata delle posizioni normalizzate."""
     if not file_dir:
         return None
     d = file_dir
@@ -121,7 +126,7 @@ def document_links(doc: Document, m: StudyModel, uri: str) -> List[types.Documen
     if uri.startswith("file://"):
         file_dir = os.path.dirname(url2pathname(uri[len("file://"):]))
     samples_dir = doc.get(("samples_dir",), "samples") or "samples"
-    root = _find_samples_dir(file_dir, str(samples_dir))
+    root = find_samples_dir(file_dir, str(samples_dir))
     if root is None:
         return out
     for entry in doc.iter_entries():

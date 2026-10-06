@@ -4,7 +4,10 @@
   `≈ 0.05 hz`), cosi' il "rand di X in stack" si legge in entrambi gli spazi;
 - tempi normalizzati dei breakpoint: resi in secondi sulla duration;
 - duty factor accanto a grain.duration quando density e grain.duration sono
-  scalari (`duty ≈ density × grain.duration`).
+  scalari (`duty ≈ density × grain.duration`);
+- posizioni nel sample (`start`, `loop_*`) sotto `loop_unit: normalized`:
+  resi in secondi sulla durata del **sample**, letta dall'header del file
+  (`loop_end: 0.363636  ≈ 2.00 s`).
 """
 from __future__ import annotations
 
@@ -13,6 +16,7 @@ from typing import Any, List, Optional
 from lsprotocol import types
 
 from . import engine_info as EI
+from . import positions
 from .convert import as_num as _num, fmt_num
 from .model import STACK_RESERVED, StudyModel, compact_summary, in_spread_let
 from .yamlpos import Document, KeyPath
@@ -30,8 +34,10 @@ def _hint(line: int, col: int, label: str) -> types.InlayHint:
     )
 
 
-def hints(doc: Document, m: StudyModel, start_line: int, end_line: int
-          ) -> List[types.InlayHint]:
+def hints(doc: Document, m: StudyModel, start_line: int, end_line: int,
+          file_dir: Optional[str] = None) -> List[types.InlayHint]:
+    """``file_dir`` e' la cartella dello study.yml: senza, le posizioni
+    normalizzate restano senza secondi (il sample non si trova)."""
     out: List[types.InlayHint] = []
     if doc.data is None:
         return out
@@ -77,7 +83,23 @@ def hints(doc: Document, m: StudyModel, start_line: int, end_line: int
             out.append(_hint(e.value_span.end_line, e.value_span.end_col,
                              f"duty ≈ {fmt_num(round(duty, 3))} ({state})"))
 
-    # 3) tempi normalizzati -> secondi (env di banda e stack)
+    # 3) posizioni nel sample sotto loop_unit: normalized -> secondi reali.
+    #    Prima dei tempi normalizzati: sono poche, e il tetto di MAX_HINTS non
+    #    deve lasciarle fuori su un documento pieno di envelope
+    resolver = positions.Resolver(doc, m, file_dir)
+    for entry in (doc.iter_entries() if file_dir else ()):
+        if len(out) >= MAX_HINTS:
+            break
+        if entry.kind != "scalar":
+            continue
+        vs = entry.value_span
+        if not (start_line <= vs.end_line <= end_line):
+            continue
+        reading = resolver.reading(entry.path)
+        if reading is not None:
+            out.append(_hint(vs.end_line, vs.end_col, reading.label))
+
+    # 4) tempi normalizzati -> secondi (env di banda e stack)
     #    la durata e' per-stream (granstudies #42): dentro un override si legge
     #    quella dello stream, fuori quella risolta del documento
     if m.duration_for() is not None or m.streams:
@@ -106,7 +128,7 @@ def hints(doc: Document, m: StudyModel, start_line: int, end_line: int
                 out.append(_hint(vs.end_line, vs.end_col,
                                  f"→{fmt_num(round(t * dur, 3))}s"))
 
-    # 4) forma compatta a cicli: cosa produce, senza espanderla a mente
+    # 5) forma compatta a cicli: cosa produce, senza espanderla a mente
     for entry in doc.iter_entries():
         if len(out) >= MAX_HINTS:
             break

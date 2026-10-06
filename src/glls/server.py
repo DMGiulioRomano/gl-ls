@@ -127,18 +127,24 @@ def completion(ls: GllsServer, params: types.CompletionParams
                ) -> List[types.CompletionItem]:
     uri = params.text_document.uri
     doc, m = ls.doc_of(uri)
-    file_dir = None
-    if uri.startswith("file://"):
-        file_dir = os.path.dirname(url2pathname(uri[len("file://"):]))
     return completion_mod.complete(doc, m, params.position.line,
-                                   params.position.character, file_dir)
+                                   params.position.character, _file_dir(uri))
+
+
+def _file_dir(uri: str) -> Optional[str]:
+    """La cartella dello study.yml, per risolvere i sample; None fuori dal
+    disco (un buffer senza nome, uno schema ``untitled:``)."""
+    if uri.startswith("file://"):
+        return os.path.dirname(url2pathname(uri[len("file://"):]))
+    return None
 
 
 @server.feature(types.TEXT_DOCUMENT_HOVER)
 def hover(ls: GllsServer, params: types.HoverParams) -> Optional[types.Hover]:
-    doc, m = ls.doc_of(params.text_document.uri)
+    uri = params.text_document.uri
+    doc, m = ls.doc_of(uri)
     return hover_mod.hover(doc, m, params.position.line,
-                           params.position.character)
+                           params.position.character, _file_dir(uri))
 
 
 @server.feature(
@@ -162,9 +168,10 @@ def document_symbol(ls: GllsServer, params: types.DocumentSymbolParams
 @server.feature(types.TEXT_DOCUMENT_INLAY_HINT)
 def inlay_hint(ls: GllsServer, params: types.InlayHintParams
                ) -> List[types.InlayHint]:
-    doc, m = ls.doc_of(params.text_document.uri)
+    uri = params.text_document.uri
+    doc, m = ls.doc_of(uri)
     return inlay_mod.hints(doc, m, params.range.start.line,
-                           params.range.end.line)
+                           params.range.end.line, _file_dir(uri))
 
 
 @server.feature(types.TEXT_DOCUMENT_CODE_LENS)

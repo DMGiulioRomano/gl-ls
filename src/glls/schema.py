@@ -334,6 +334,71 @@ SPREAD_N_ENV_DOC = (
     "proprio, usa `n` scalare e scrivi gli envelope in `over.base.volume`."
 )
 
+# ``for_each:`` (granstudies ``for_each.py``): una batteria di cartelle, una per
+# combinazione. La cosa da dire subito e' che le sue chiavi non sono nomi
+# liberi: ``coppia`` e' riservata, ogni altra e' un path nel documento.
+FOR_EACH_DOC = (
+    "**Una cartella per combinazione.** Ogni chiave e' un asse esterno allo "
+    "studio, e il prodotto cartesiano dei suoi stati genera una cartella per "
+    "combinazione, con label `k=v__k=v`.\n\n"
+    "- `coppia` e' **riservata**: i suoi stati sono patch sul documento, non "
+    "valori di una variabile nel senso ordinario;\n"
+    "- ogni altra chiave e' un **path puntato dentro il documento** "
+    "(`base.pitch.range`, `base.pointer.offset_range`), non un nome libero: "
+    "si valida segmento per segmento come la forma annidata equivalente, e "
+    "i suoi valori finiscono li'. Un nome d'asse (`density`) non e' un path: "
+    "il path e' `base.density` o `axes.density.<chiave>`."
+)
+COPPIA_DOC = (
+    "**Chiave riservata di `for_each:`**, come `onset`/`duration`/`chunk` in "
+    "`versions:`: non e' un path del documento. I suoi **stati sono patch sul "
+    "documento** — ognuno riscrive le chiavi che nomina — e il contenuto di una "
+    "patch non si confronta col vocabolario di un contesto dello studio."
+)
+# Le chiavi di ``for_each:`` che non sono path nel documento.
+FOR_EACH_RESERVED = ("coppia",)
+
+# Chiavi private al root (gl-ls #48): convenzione dei magazzini di valori
+# (``_assi:``) riusati via alias YAML. La pipeline le ignora, e il sottoalbero
+# non appartiene al linguaggio: nessun contesto da cui leggere un vocabolario.
+PRIVATE_PREFIX = "_"
+PRIVATE_DOC = (
+    "**Chiave privata** (prefisso `_`): la pipeline la ignora, e gl-ls non "
+    "valida ne' lei ne' il suo sottoalbero. E' la convenzione dei magazzini di "
+    "valori — `_assi:` — che tengono i `values` in un posto solo per riusarli "
+    "via alias YAML (`&ax_duration` / `*ax_duration`). Cio' che l'alias porta "
+    "altrove si valida li', dove e' letto."
+)
+
+
+def is_private_key(name: object) -> bool:
+    """True per una chiave privata al root: stringa col prefisso ``_``."""
+    return isinstance(name, str) and name.startswith(PRIVATE_PREFIX)
+
+
+# ``distribution_mode`` / ``range_anchor`` (``StreamConfig`` dell'engine, PGE
+# v9): la banda dei ``_range``. Due assi ortogonali, e nessuno dei due e' la
+# ``distribution`` di Truax — che e' la chiave con cui l'editor la confondeva.
+DISTRIBUTION_MODE_DOC = (
+    "**Forma della banda dei `_range`**: `uniform` (default, piatta) | "
+    "`gaussian` (troncata, sigma = larghezza/6, picco al centro della banda). "
+    "Dice *come* la banda si riempie, non quanto e' larga (quello e' il valore "
+    "del `_range`) ne' dove cade il valore base (quello e' `range_anchor`).\n\n"
+    "Non e' `distribution`: quella e' il modello di Truax (0 = sincrono, 1 = "
+    "asincrono), sull'emissione dei grani. Fuori vocabolario l'engine alza "
+    "`StrategyNotFoundError`."
+)
+RANGE_ANCHOR_DOC = (
+    "**Ancora della banda dei `_range`**: `center` (default, banda "
+    "`[base - range/2, base + range/2]`) | `min` (banda `[base, base + range]`: "
+    "base e' il minimo). Governa i `_range` che passano da `Parameter` — "
+    "`volume_range`, `pan_range`, `grain.duration_range`, "
+    "`pointer.offset_range`, `pitch.range` — non il jitter implicito ne' lo "
+    "spread delle voci. Con `min` il tetto della banda puo' sforare il massimo "
+    "del parametro: l'engine lo verifica al parse. Fuori vocabolario e' un "
+    "`InvalidFieldValueError`."
+)
+
 _LET_DOC_SPREAD = (
     "**Manopole di voce.** Blocco `let:` dentro `spread:`, accanto a `n`/`over`: "
     "un valore pescato/derivato per stream generato. Solo `expr` (con `i`/`n`) e "
@@ -393,7 +458,10 @@ _ENGINE_STREAM_KEYS = [
                   "Mutuamente esclusivo con `fill_factor` (che ha priorita')."),
     _k("fill_factor", "density = fill_factor / grain.duration. Bounds [0.001, 50]."),
     _k("distribution", "Modello Truax: 0 = sincrono, 1 = asincrono; blend lineare. "
-                       "Scalare o envelope."),
+                       "Scalare o envelope. Non e' `distribution_mode`, che e' "
+                       "la forma della banda dei `_range`."),
+    _k("distribution_mode", DISTRIBUTION_MODE_DOC, values=EI.DISTRIBUTION_MODES),
+    _k("range_anchor", RANGE_ANCHOR_DOC, values=EI.RANGE_ANCHORS),
     _k("volume", f"dB (default 0). Bounds [-120, {EI.VOLUME_MAX_DB:g}]. "
                  "Scalare o envelope. Sopra 0 dBFS il renderer non normalizza: "
                  "il range positivo e' clipping reale, non headroom."),
@@ -611,6 +679,12 @@ _ROOT_KEYS = [
        kind="keyword"),
     _k("let", _LET_DOC_DOCUMENT, kind="keyword",
        snippet="let:\n  ${1:manopola}: ${2:valore}"),
+    _k("for_each", FOR_EACH_DOC, kind="keyword",
+       snippet="for_each:\n  ${1:base.distribution}: [${2:0}, ${3:1}]"),
+]
+
+_FOR_EACH_KEYS = [
+    _k("coppia", COPPIA_DOC, kind="keyword"),
 ]
 
 _AXES_RESERVED = [
@@ -640,12 +714,19 @@ _AXIS_KEYS = [
 ] + _ENV_KEYS
 
 _SWEEP_KEYS = [
-    _k("mode", "discrete | envelope | both (default discrete).", values=EI.SWEEP_MODES),
+    _k("mode", "discrete | envelope | both (default discrete). Il ramo "
+               "`discrete` legge solo `orders`: gli `orderings` sono "
+               "traversate temporali e hanno effetto solo in `envelope` (e "
+               "nella meta' envelope di `both`).", values=EI.SWEEP_MODES),
     _k("plateau", "Secondi di ascolto stabile per valore (default 5.0)."),
     _k("transition", "Secondi di transizione tra plateau (default 5.0)."),
-    _k("orders", "Ordini da generare: 1 = un asse alla volta, 2 = coppie, ..."),
+    _k("orders", "Ordini da generare: 1 = un asse alla volta, 2 = coppie, ... "
+                 "Assente: `[1..n]`, ma `[]` se `orderings` e' popolato."),
     _k("orderings", "Permutazioni esplicite: primo = asse lento (outer), "
-                    "ultimo = veloce (inner)."),
+                    "ultimo = veloce (inner). Sono traversate temporali: in "
+                    "`mode: discrete` (il default) non hanno effetto, e con "
+                    "`orders` assente lo azzerano — `orders` diventa `[]` e lo "
+                    "sweep non genera nessuna variante."),
     _k("stream_id", "(interno) id stream impostato dal resolver.", kind="internal"),
 ]
 
@@ -793,6 +874,8 @@ CONTEXTS: Dict[str, List[Key]] = {
     "spread_strategy": _SPREAD_STRATEGY_KEYS,
     "gain_compensation": _GAIN_COMPENSATION_KEYS,
     "percorso": [],                  # schema interno non modellato: nomi liberi
+    "for_each": _FOR_EACH_KEYS,      # + path puntati nel documento
+    "private": [],                   # sottoalbero di una chiave privata
     "let": [],
     "value": [],
 }
@@ -953,6 +1036,15 @@ def context_for_path(path: KeyPath, axis_names=frozenset()) -> str:
     if not path:
         return "root"
     head = path[0]
+    if is_private_key(head):
+        # magazzino privato: fuori dal linguaggio, nessun vocabolario. Senza
+        # questo ramo ``("_assi",)`` ricadeva sul contesto ``root`` e i suoi
+        # figli venivano confrontati con le chiavi del documento.
+        return "private"
+    if head == "for_each":
+        # le chiavi sono path (validati da ``_check_for_each``) o la riservata
+        # ``coppia``, i cui stati sono patch: sotto, niente vocabolario
+        return "for_each" if len(path) == 1 else "value"
     if head == "streams":
         if len(path) == 1:
             return "streams"

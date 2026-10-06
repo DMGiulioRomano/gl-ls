@@ -25,7 +25,7 @@ questi ``study.yml`` e' quello, quindi la superficie da rispecchiare e' la sua.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, Optional, Tuple, Union
 
 OUTPUT_SR = 48000
@@ -365,6 +365,15 @@ SWEEP_MODES = ["discrete", "envelope", "both"]
 DISTRIBUTIONS = ["uniform", "gaussian"]
 TIME_MODES = ["absolute", "normalized"]
 CLIP_STRATEGIES = ["overflow_margin", "passthrough"]
+# La banda dei ``_range`` (``StreamConfig`` di PGE v9, ``docs/reference/yaml.md``
+# «La banda dei ``_range``»): due assi ortogonali, entrambi a vocabolario
+# chiuso. ``distribution_mode`` e' la *forma* (``DistributionFactory.modes()``,
+# fuori di qui ``StrategyNotFoundError``) e omonima per caso della
+# ``distribution`` di una banda di studio, che pesca da un altro vocabolario;
+# ``range_anchor`` e' dove cade il valore base dentro la banda
+# (``RANGE_ANCHORS``, fuori di qui ``InvalidFieldValueError``).
+DISTRIBUTION_MODES = ["uniform", "gaussian"]
+RANGE_ANCHORS = ["center", "min"]
 # Unita' di ``grain.duration``/``grain.duration_range``
 # (``pge.core.stream.GRAIN_DURATION_UNITS``, granstudies
 # ``bounds.GRAIN_DURATION_UNITS``). ``milliseconds`` entra con PGE v5.2.0.
@@ -405,6 +414,29 @@ LOOP_UNIT_DEFAULT = "seconds"
 # sia: e' una posizione nel sample come ``loop_start``, stesso dominio e
 # stessa unita'.
 LOOP_UNIT_SCOPE = ("start", "loop_start", "loop_end", "loop_dur")
+
+#: I path engine delle posizioni nel sample: quelli la cui unita' non e' un
+#: fatto del parametro ma di ``loop_unit``.
+POSITION_PATHS = frozenset(f"pointer.{k}" for k in LOOP_UNIT_SCOPE)
+
+#: L'unita' di una posizione sotto ``loop_unit: normalized``: una frazione
+#: della durata del **sample** — non della ``duration`` dello stream, che e'
+#: il riferimento dell'asse X degli envelope, non del valore.
+NORMALIZED_POSITION_UNIT = "frazione della durata del sample"
+
+
+def info_for(dotted: str, loop_unit: Optional[str] = None) -> Optional[ParamInfo]:
+    """La riga di ``PARAMS`` letta con la ``loop_unit`` in vigore.
+
+    Lo snapshot dichiara le posizioni in secondi, che e' il default: con
+    ``loop_unit: normalized`` lo stesso numero e' una frazione del sample, e
+    un hover che dicesse «s» su ``loop_end: 0.36`` affermerebbe il falso.
+    Solo l'unita' cambia: i bounds restano quelli dichiarati, il massimo
+    dinamico (la durata del sample) non si confronta comunque."""
+    info = PARAMS.get(dotted)
+    if info is None or dotted not in POSITION_PATHS or loop_unit != "normalized":
+        return info
+    return replace(info, unit=NORMALIZED_POSITION_UNIT)
 
 # ---------------------------------------------------------------------------
 # Verso di lettura del grano: ``grain.read_direction`` (PGE #207).

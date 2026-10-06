@@ -117,6 +117,7 @@ def collect(doc: Document, m: StudyModel) -> List[types.Diagnostic]:
     _check_sweep(bag, doc, m, ("sweep",))
     _check_stack(bag, doc, m, ())
     _check_versions(bag, doc, m)
+    _check_for_each(bag, doc, m)
     _check_gain_compensation(bag, doc, m)
     _check_streams(bag, doc, m)
     _check_global_spread(bag, doc, m)
@@ -937,6 +938,65 @@ def _check_sweep(bag: Bag, doc: Document, m: StudyModel, spath: KeyPath) -> None
                     code="orders-redundant",
                     data={"fix": {"kind": "remove-key",
                                   "path": list(spath + ("orders",))}})
+    _check_orderings_discrete(bag, doc, spath, sweep)
+
+
+def _has_orderings(orderings: Any) -> bool:
+    """``orderings`` popolato: almeno una voce non vuota. ``orderings: []`` e'
+    la forma con cui uno stream spegne le traversate, e non conta."""
+    return (isinstance(orderings, list)
+            and any(isinstance(o, list) and o for o in orderings))
+
+
+def _check_orderings_discrete(bag: Bag, doc: Document, spath: KeyPath,
+                              sweep: Dict[str, Any]) -> None:
+    """``orderings`` sotto ``mode: discrete``: senza effetto, e con ``orders``
+    assente la generazione a zero (gl-ls #48).
+
+    Due regole del runtime che, prese una alla volta, sono giuste. La prima e'
+    di ``study_spec``: con ``orderings`` popolato e ``orders`` assente,
+    ``orders`` vale ``[]`` — chi ha scelto le combinazioni non se ne vede
+    aggiungere altre. La seconda e' di ``generate_discrete_variants``: il ramo
+    discrete legge solo ``orders``, perche' gli orderings sono traversate
+    *temporali* e vivono nel ramo envelope. Insieme, in ``mode: discrete`` — il
+    default — lo sweep non genera niente, e nessuno lo dice.
+
+    Il runtime valida il documento *merged* per stream: un override che passa a
+    ``discrete`` eredita gli orderings del documento. Lo stream pero' parla
+    solo se tocca la coppia (``mode`` o ``orderings``); altrimenti il rilievo
+    e' del documento, e l'ha gia' avuto."""
+    in_stream = spath[:1] == ("streams",)
+    if in_stream:
+        if "mode" not in sweep and "orderings" not in sweep:
+            return
+        doc_sweep = doc.get(("sweep",))
+        eff = {**doc_sweep, **sweep} if isinstance(doc_sweep, dict) else dict(sweep)
+    else:
+        eff = sweep
+    if eff.get("mode", "discrete") != "discrete" or not _has_orderings(
+            eff.get("orderings")):
+        return
+    own_orderings = "orderings" in sweep
+    site = spath + (("orderings",) if own_orderings else ("mode",))
+    label = (f"streams['{spath[1]}'].sweep" if in_stream else "sweep")
+    come = "mode: discrete" if "mode" in eff else "mode: discrete (il default)"
+    if "orders" in eff:
+        msg = (f"{label}: gli 'orderings' sotto '{come}' non hanno effetto — "
+               "il ramo discrete legge solo 'orders', e le varianti le "
+               "generano solo quelli. Gli orderings sono traversate temporali: "
+               "per quelle usa 'mode: envelope' (o 'both'), altrimenti toglili.")
+    else:
+        msg = (f"{label}: gli 'orderings' sotto '{come}' non hanno effetto, e "
+               "con 'orders' assente lo azzerano — con 'orderings' popolato "
+               "'orders' vale [], quindi lo sweep non genera nessuna variante, "
+               "in silenzio. Gli orderings sono traversate temporali: per "
+               "quelle usa 'mode: envelope' (o 'both'); per le varianti "
+               "discrete togli 'orderings' (orders torna a [1..n]) o dichiara "
+               "'orders'.")
+    bag.add(site, msg, types.DiagnosticSeverity.Warning,
+            code="orderings-discrete",
+            data={"fix": {"kind": "orderings-discrete", "sweep": list(spath),
+                          "remove": own_orderings}})
 
 
 def _check_stack(bag: Bag, doc: Document, m: StudyModel, prefix: KeyPath) -> None:
@@ -1687,6 +1747,18 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
         bag.add(bpath + ("time_mode",),
                 f"time_mode '{tm}' non valido (absolute | normalized).",
                 code="bad-enum", prefer_value=True)
+    # la banda dei ``_range``: forma e ancora, due vocabolari chiusi
+    for key, vocab in (("distribution_mode", EI.DISTRIBUTION_MODES),
+                       ("range_anchor", EI.RANGE_ANCHORS)):
+        v = base.get(key)
+        if v is None or v in vocab:
+            continue
+        sug = _suggest(str(v), vocab) if isinstance(v, str) else None
+        extra = f" Forse '{sug}'?" if sug else ""
+        bag.add(bpath + (key,),
+                f"{key} '{v}' non valido ({' | '.join(vocab)}).{extra}",
+                code="bad-enum", prefer_value=True,
+                data={"fix": {"kind": "rename-value", "new": sug}} if sug else None)
     if "seed" in base:
         bag.add(bpath + ("seed",),
                 "seed per-stream: l'engine lo ignora — StreamConfig.from_yaml "
@@ -2163,9 +2235,11 @@ def _check_loop_unit(bag: Bag, doc: Document) -> None:
     base_ptr = base.get("pointer") if isinstance(base.get("pointer"), dict) else {}
     streams = data.get("streams") if isinstance(data.get("streams"), dict) else {}
     # Le posizioni dichiarate fuori dagli stream (spread globale, versions,
-    # percorso) valgono per tutti, come il base.
+    # percorso, for_each) valgono per tutti, come il base. Il magazzino privato
+    # no: la pipeline non lo legge.
     puntate_doc = _dotted_positions(
-        {k: v for k, v in data.items() if k != "streams"})
+        {k: v for k, v in data.items()
+         if k != "streams" and not schema.is_private_key(k)})
     # ``streams:`` assente = un solo stream, quello del base (resolve_streams).
     voci = list(streams.items()) or [(None, {})]
     visti: set = set()
@@ -2300,30 +2374,165 @@ def _check_dotted_key(bag: Bag, m: StudyModel, base: KeyPath, key: str) -> None:
     un nome d'asse eventualmente dotted: il confine e' risolto col
     boundary-match (assi dichiarati > registro engine > primo segmento) e il
     nome resta un segmento unico."""
-    axis_names = frozenset(m.axes)
+    parts, amb = _dotted_key_parts(m, key)
+    if amb is not None:
+        _report_ambiguous_axis(bag, base + (key,), key, amb)
+        return
+    problem = _unknown_segment(m, base, parts)
+    if problem is None:
+        return
+    seg, ctx, fixed = problem
+    extra = f" Forse intendevi '{fixed}'?" if fixed else ""
+    bag.add(base + (key,),
+            f"Chiave puntata '{key}': segmento '{seg}' non previsto nel "
+            f"contesto '{ctx}'.{extra}",
+            types.DiagnosticSeverity.Warning, code="unknown-key",
+            data={"fix": {"kind": "rename", "new": fixed}} if fixed else None)
+
+
+def _dotted_key_parts(m: StudyModel, key: str
+                      ) -> Tuple[List[str], Optional[Tuple[str, ...]]]:
+    """I segmenti di una chiave puntata, col nome d'asse tenuto intero.
+
+    Sotto ``axes.``/``stack.`` il primo identificatore e' un nome d'asse
+    eventualmente dotted, e il suo confine si risolve col boundary-match
+    (assi dichiarati > registro engine > primo segmento). Il secondo elemento
+    porta i nomi in conflitto quando il confine e' indecidibile."""
     parts: List[str] = key.split(".")
     if parts[0] in ("axes", "stack") and len(parts) > 1:
-        axis, tail, amb = EI.split_axis_key(".".join(parts[1:]), axis_names)
+        axis, tail, amb = EI.split_axis_key(".".join(parts[1:]),
+                                            frozenset(m.axes))
         if amb is not None:
-            _report_ambiguous_axis(bag, base + (key,), key, amb)
-            return
+            return parts, amb
         parts = [parts[0], axis, *tail]
+    return parts, None
+
+
+def _unknown_segment(m: StudyModel, base: KeyPath, parts: List[str]
+                     ) -> Optional[Tuple[str, str, Optional[str]]]:
+    """Il primo segmento che il contesto della forma annidata non prevede.
+
+    ``(segmento, contesto, chiave corretta o None)``, oppure None se ogni
+    segmento regge. Un contesto a nomi liberi (``axes``, ``stack``, ...) non
+    giudica il suo segmento."""
+    axis_names = frozenset(m.axes)
     for i, seg in enumerate(parts):
         ctx = schema.context_for_path(base + tuple(parts[:i]), axis_names)
         if ctx not in schema.CLOSED_CONTEXTS:
-            continue  # contesto a nomi liberi (axes, stack, ...)
+            continue
         allowed = [k.name for k in schema.keys_for(ctx)]
         if seg in allowed:
             continue
         sug = _suggest(seg, allowed)
         fixed = ".".join(parts[:i] + [sug] + parts[i + 1:]) if sug else None
-        extra = f" Forse intendevi '{fixed}'?" if fixed else ""
-        bag.add(base + (key,),
-                f"Chiave puntata '{key}': segmento '{seg}' non previsto nel "
-                f"contesto '{ctx}'.{extra}",
-                types.DiagnosticSeverity.Warning, code="unknown-key",
-                data={"fix": {"kind": "rename", "new": fixed}} if fixed else None)
+        return seg, ctx, fixed
+    return None
+
+
+# ---------------------------------------------------------------------------
+# ``for_each:``: una cartella per combinazione (gl-ls #48)
+
+
+def _check_for_each(bag: Bag, doc: Document, m: StudyModel) -> None:
+    """Il blocco ``for_each:`` (granstudies ``for_each.py``).
+
+    ``coppia`` e' riservata — i suoi stati sono patch sul documento, e il
+    contenuto di una patch non si giudica qui. Ogni altra chiave e' un asse
+    esterno il cui nome **e' un path puntato dentro il documento**: si valida
+    come tale, segmento per segmento nel contesto della forma annidata, non
+    come un nome d'asse — l'errore dell'issue era proprio il contrario, 11
+    falsi ``unknown-key`` su path giusti letti come chiavi del ``root``.
+
+    I valori di un path che e' un parametro engine noto (``base.<path>``) si
+    confrontano coi suoi bounds, come ogni altro valore che finisce li'. Solo i
+    numeri nudi di una lista: la forma dei valori di un asse esterno e' del
+    runtime, e cio' che non e' un numero non si indovina."""
+    fpath: KeyPath = ("for_each",)
+    block = doc.get(fpath)
+    if block is None:
         return
+    if not isinstance(block, dict):
+        bag.add(fpath,
+                "'for_each' e' un mapping: 'coppia' (riservata, stati come "
+                "patch sul documento) e assi esterni con nome = path puntato "
+                "nel documento (es. 'base.pitch.range: [0, 1]').",
+                code="for-each-type")
+        return
+    grain_unit = _grain_unit(doc, ("base",))
+    for key, val in block.items():
+        if not isinstance(key, str) or key in schema.FOR_EACH_RESERVED:
+            continue
+        kp = fpath + (key,)
+        if not all(key.split(".")):
+            bag.add(kp, f"for_each: '{key}' non e' un path del documento "
+                    "(segmento vuoto).", code="for-each-path")
+            continue
+        parts, amb = _dotted_key_parts(m, key)
+        if amb is not None:
+            _report_ambiguous_axis(bag, kp, key, amb)
+            continue
+        problem = _unknown_segment(m, (), parts)
+        if problem is not None:
+            seg, ctx, fixed = problem
+            # dimenticare ``base.`` e' l'errore piu' probabile: il nome e' un
+            # parametro engine, ma nel documento vive dentro ``base:``
+            if seg == parts[0] and _unknown_segment(m, ("base",), parts) is None:
+                fixed = f"base.{key}"
+            extra = f" Forse intendevi '{fixed}'?" if fixed else ""
+            bag.add(kp,
+                    f"for_each: '{key}' non e' un path del documento — il "
+                    f"segmento '{seg}' non e' previsto nel contesto "
+                    f"'{ctx}'.{extra} Ogni chiave di 'for_each' diversa da "
+                    "'coppia' e' un path puntato dentro il documento (es. "
+                    "'base.pitch.range'), non un nome d'asse.",
+                    code="for-each-path",
+                    data={"fix": {"kind": "rename", "new": fixed}} if fixed else None)
+            continue
+        if _for_each_dead_target(bag, m, kp, key, parts):
+            continue
+        dotted = key[len("base."):] if key.startswith("base.") else None
+        if dotted not in EI.PARAMS:
+            continue
+        values = val.get("values") if isinstance(val, dict) else val
+        if not isinstance(values, list):
+            continue
+        vpath = kp + (("values",) if isinstance(val, dict) else ())
+        for i, v in enumerate(values):
+            _check_bounds_value(bag, vpath + (i,), dotted, v,
+                                f"for_each['{key}'][{i}]", grain_unit=grain_unit)
+
+
+# Le chiavi che lo schema tiene solo per diagnosticarle (``kind="deprecated"``),
+# con la grafia che le sostituisce come segmento di path: la ``duration:``
+# top-level e' vietata (granstudies #42), ``dephase`` e' morta (PGE #204).
+_DEAD_SEGMENTS = {("root", "duration"): "base.duration",
+                  ("engine_stream", "dephase"): "deviation_probability"}
+
+
+def _for_each_dead_target(bag: Bag, m: StudyModel, kp: KeyPath, key: str,
+                          parts: List[str]) -> bool:
+    """Un path di ``for_each`` che arriva a una chiave vietata o morta.
+
+    Il path regge segmento per segmento — lo schema quelle chiavi le conosce,
+    per poterle spiegare — ma la patch scriverebbe dove il runtime rifiuta
+    (``duration`` top-level) o dove l'engine non legge piu' (``dephase``).
+    ``True`` se la diagnostica e' stata emessa."""
+    axis_names = frozenset(m.axes)
+    for i, seg in enumerate(parts):
+        ctx = schema.context_for_path(tuple(parts[:i]), axis_names)
+        k = schema.key_in(ctx, seg)
+        if k is None or k.kind != "deprecated":
+            continue
+        new_seg = _DEAD_SEGMENTS.get((ctx, seg))
+        fixed = ".".join(parts[:i] + [new_seg] + parts[i + 1:]) if new_seg else None
+        extra = f" Forse intendevi '{fixed}'?" if fixed else ""
+        bag.add(kp,
+                f"for_each: '{key}' arriva a '{seg}', che il documento non "
+                f"accetta piu' (vedi l'hover della chiave).{extra}",
+                code="for-each-path",
+                data={"fix": {"kind": "rename", "new": fixed}} if fixed else None)
+        return True
+    return False
 
 
 def _check_unknown_keys(bag: Bag, doc: Document, m: StudyModel) -> None:
@@ -2362,6 +2571,9 @@ def _check_unknown_keys(bag: Bag, doc: Document, m: StudyModel) -> None:
         allowed = [k.name for k in schema.keys_for(ctx)]
         for key in value:
             if not isinstance(key, str) or key in allowed:
+                continue
+            # magazzino privato al root (``_assi:``): la pipeline lo ignora
+            if not entry.path and schema.is_private_key(key):
                 continue
             # i contesti env/axis condividono il vocabolario banda: gia' coperti
             if ctx == "walk" or (ctx == "axis" and key in ("rand", "cps")):
@@ -2663,6 +2875,10 @@ def _check_expr_nodes(bag: Bag, doc: Document, m: StudyModel) -> None:
         if len(p) >= 3 and p[0] == "streams" and p[2] == "spread":
             continue
         if p and p[0] == "spread":
+            continue
+        # il magazzino privato non si valuta: un nome li' dentro e' in scope
+        # solo dove l'alias lo porta, e li' la expr si valuta gia'
+        if p and schema.is_private_key(p[0]):
             continue
         # slot strutturali di un asse (baseline, values[i]): un nodo-expr li'
         # non e' ammesso *a prescindere* dal fatto che l'espressione regga —
