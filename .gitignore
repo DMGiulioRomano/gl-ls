@@ -575,3 +575,13 @@ node_modules/
 *.vsix
 
 .vscode-test/
+
+# `[Ss]cripts` qui sopra viene dal template Python/Windows, dove `Scripts/` e'
+# la cartella dei binari di un venv. Senza nome di cartella il pattern prende
+# anche `.github/scripts/`, dove sta il check del corpo delle PR: il file non
+# si committava, e il workflow cercava uno script che nel repo non c'era. La
+# cartella va riammessa prima dei suoi file -- un file dentro una cartella
+# esclusa non si puo' riammettere da solo. Solo i `.py`, e non `**`: con
+# quello rientrava anche `__pycache__`, e un `.pyc` e' finito in un commit.
+!.github/scripts/
+!.github/scripts/*.py
