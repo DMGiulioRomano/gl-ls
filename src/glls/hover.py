@@ -11,6 +11,7 @@ from typing import Any, List, Optional
 
 from lsprotocol import types
 
+from . import engine_expr as EX
 from . import engine_info as EI
 from . import positions, schema
 from .convert import as_num as _num, fmt_num
@@ -132,6 +133,18 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
     if ctx == "for_each" and name not in schema.FOR_EACH_RESERVED:
         return _hover_for_each_axis(m, str(name), rng)
 
+    # il nome di una mappa: il suo tipo, detto dal catalogo
+    if ctx == "maps":
+        spec = doc.get(path)
+        tipo = spec.get("type") if isinstance(spec, dict) else None
+        text = (EI.map_kind_doc(tipo) if isinstance(tipo, str) else None)
+        return _md(f"**mappa `{name}`** — si legge in un'espressione del "
+                   f"motore come `{name}`"
+                   + (f" (e `{name}.y`)" if tipo == "henon" or (
+                       tipo == EI.MAP_TYPE_CUSTOM and isinstance(spec, dict)
+                       and spec.get("y") is not None) else "")
+                   + ".\n\n" + (text or schema.MAPS_DOC), rng)
+
     # nomi dinamici: assi e stream
     if ctx == "axes" and name not in AXES_RESERVED:
         return _md(_axis_summary(m, str(name)), rng)
@@ -245,6 +258,61 @@ def _dotted_engine_path(path: KeyPath) -> Optional[str]:
     return dotted if dotted in EI.PARAMS else None
 
 
+def _engine_block_of(path: KeyPath):
+    """``(bpath, resto)`` di un key-path dentro un blocco engine (``base`` o
+    ``streams.<nome>.base``), o None."""
+    if len(path) >= 2 and path[0] == "base":
+        return ("base",), tuple(path[1:])
+    if len(path) >= 4 and path[0] == "streams" and path[2] == "base":
+        return tuple(path[:3]), tuple(path[3:])
+    return None
+
+
+def _hover_engine_string(doc: Document, bpath: KeyPath, rest: KeyPath,
+                         value: str) -> Optional[str]:
+    from .diagnostics import _map_variables, _merged_engine_block
+    if not all(isinstance(p, str) for p in rest):
+        return None
+    dotted = ".".join(rest)
+    merged = _merged_engine_block(doc, bpath)
+    maps = merged.get("maps") if isinstance(merged.get("maps"), dict) else {}
+    if len(rest) == 3 and rest[0] == "maps":
+        if rest[2] == "type":
+            return EI.map_kind_doc(value)
+        if rest[2] in ("x", "y"):
+            return (f"**equazione di `{rest[1]}`** — `{rest[2]}[n+1] = "
+                    f"{value.strip()}`, nel linguaggio delle espressioni del "
+                    "motore, sulle variabili `x`, `y`, `r` dello stato della "
+                    "mappa. Le due equazioni usano la coppia di prima.")
+        return None
+    if not EX.outer_parenthesized(value):
+        return None
+    if dotted not in EX.EXPRESSION_FIELDS:
+        return None
+    if EX.load_time_constant(value):
+        return (f"**costante** — `{value.strip()}` legge solo nomi che il "
+                "caricamento conosce: il motore la valuta una volta, prima "
+                "dei grani.")
+    c = EX.compile_expression(value, _map_variables(merged))
+    lines = [f"**espressione del motore** su `{dotted}`, valutata **a ogni "
+             "grano** (non e' un nodo-expr dello studio: attraversa lo studio "
+             "intatta)."]
+    if c.ok:
+        for name in c.names:
+            base_name, _, var = name.partition(".")
+            if name == EX.TIME_NAME:
+                lines.append("- `t`: secondi dall'inizio dello stream")
+                continue
+            spec = maps.get(base_name)
+            tipo = spec.get("type") if isinstance(spec, dict) else None
+            kind = EI.MAP_KINDS.get(tipo) if isinstance(tipo, str) else None
+            rng_v = (kind.y_range if var == "y" else kind.value_range) if kind else None
+            where = (f"in [{rng_v[0]:g}, {rng_v[1]:g}]" if rng_v
+                     else "intervallo dato dall'equazione")
+            lines.append(f"- `{name}`: mappa `{tipo}`, {where}")
+    return "\n".join(lines)
+
+
 def _bp_group_slot(doc: Document, path: KeyPath) -> Optional[str]:
     """Hover dei posizionali di un BP group: ``interp`` e il run di punti.
 
@@ -297,6 +365,14 @@ def _hover_value(doc: Document, m: StudyModel, path: KeyPath,
         if unit in ("hz", "bpm"):
             text += f"\n\nPasso medio tra breakpoint: ~{fmt_num(EI.unit_convert_value(n, unit, 's'))} s"
         return _md(text, rng)
+
+    # espressioni del motore e tipi di mappa (PGE #307)
+    if isinstance(value, str):
+        engine = _engine_block_of(path)
+        if engine is not None:
+            text = _hover_engine_string(doc, engine[0], engine[1], value)
+            if text is not None:
+                return _md(text, rng)
 
     # enum documentati
     if isinstance(value, str):
