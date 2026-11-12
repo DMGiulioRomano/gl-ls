@@ -125,3 +125,37 @@ def test_compila_come_il_motore(testo):
 @pytest.mark.parametrize("testo", ["(a) + (b)", "((a))", "(a", "a)", " (a) "])
 def test_parentesi_esterne(testo):
     assert EX.outer_parenthesized(testo) == E["expression"].outer_parenthesized(testo)
+
+
+def _eval_math_expressions():
+    """Il metodo vero del Generator, estratto dall'AST ed eseguito coi soli
+    ``math`` e ``re`` (come fa la parita' di PGE-ls): importare il modulo
+    tirerebbe dentro il render."""
+    import ast
+    import math
+    import re
+    src = Path(E["expression"].__file__).resolve().parents[1] / "engine" / "generator.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+              and n.name == "_eval_math_expressions")
+    ns = {"math": math, "re": re}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[])),
+                 str(src), "exec"), ns)
+    grezza = ns["_eval_math_expressions"]
+
+    class _P:
+        def _eval_math_expressions(self, obj):
+            return grezza(self, obj)
+    return _P()._eval_math_expressions
+
+
+@pytest.mark.parametrize("testo", [
+    "(10 + 5)", "(10/2)", "(max(3, 7))", "((10/2)/10)", "(10/2)/10", "-(90/2)",
+    "voce (1).wav", "(1,2)", "(abs)", "(7//2)", "(int(3.7))", "(m1)", "(1/0)",
+    "(pi)*2", "2*(3+4)", "(pi.real)", "(1 2)",
+])
+def test_valutazione_al_caricamento(testo, capsys):
+    atteso = _eval_math_expressions()(testo)
+    capsys.readouterr()
+    mio = EX.load_time_value(testo)
+    assert mio == atteso and type(mio) is type(atteso)

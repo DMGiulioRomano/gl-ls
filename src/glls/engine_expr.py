@@ -349,3 +349,153 @@ def load_time_constant(source: str) -> bool:
 #: I caratteri del regex di ``_eval_math_expressions`` (con la virgola, PGE
 #: #309).
 _LOAD_TIME_CHARS = re.compile(r"[a-zA-Z0-9+\-*/.(), ]+")
+
+
+# ---------------------------------------------------------------------------
+# La valutazione al caricamento (`Generator._eval_math_expressions`)
+
+#: Il regex del motore (con la virgola, PGE #309): lo stesso letterale di
+#: il regex del Generator.
+_LOAD_TIME_PATTERN = re.compile(r'\(([a-zA-Z0-9+\-*/.(), ]+)\)')
+
+#: Le funzioni del `safe_dict`. `pi` ed `e` sono le costanti.
+_LOAD_TIME_FUNCTIONS = {'abs': abs, 'int': int, 'float': float,
+                        'min': min, 'max': max, 'pow': pow}
+_LOAD_TIME_CONSTANTS = {'pi': 3.141592653589793, 'e': 2.718281828459045}
+
+#: Gli attributi di un numero che sono numeri, e i metodi che ne restituiscono
+#: uno: le sole letture di un punto che `eval` trasforma in un valore.
+_NUMERIC_ATTRIBUTES = frozenset({'real', 'imag', 'numerator', 'denominator'})
+_NUMERIC_METHODS = frozenset({'conjugate'})
+
+#: Un esponente oltre il quale non si calcola: il motore resterebbe fermo a
+#: fare la potenza, e qui non si deve fermare l'editor.
+_MAX_EXPONENT = 10_000
+
+
+class _NonValutabile(Exception):
+    pass
+
+
+def _valuta(node):
+    if isinstance(node, ast.Expression):
+        return _valuta(node.body)
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            return node.value
+        raise _NonValutabile()
+    if isinstance(node, ast.Name):
+        if node.id in _LOAD_TIME_CONSTANTS:
+            return _LOAD_TIME_CONSTANTS[node.id]
+        if node.id in _LOAD_TIME_FUNCTIONS:
+            return _LOAD_TIME_FUNCTIONS[node.id]
+        raise _NonValutabile()
+    if isinstance(node, ast.Tuple):
+        return tuple(_valuta(e) for e in node.elts)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        v = _valuta(node.operand)
+        if not isinstance(v, (int, float)):
+            raise _NonValutabile()
+        return -v if isinstance(node.op, ast.USub) else +v
+    if isinstance(node, ast.BinOp):
+        a, b = _valuta(node.left), _valuta(node.right)
+        if not all(isinstance(x, (int, float)) for x in (a, b)):
+            raise _NonValutabile()
+        op = node.op
+        try:
+            if isinstance(op, ast.Add):
+                return a + b
+            if isinstance(op, ast.Sub):
+                return a - b
+            if isinstance(op, ast.Mult):
+                return a * b
+            if isinstance(op, ast.Div):
+                return a / b
+            if isinstance(op, ast.FloorDiv):
+                return a // b
+            if isinstance(op, ast.Pow):
+                if abs(b) > _MAX_EXPONENT:
+                    raise _NonValutabile()
+                return a ** b
+        except (ArithmeticError, ValueError):
+            raise _NonValutabile()
+        raise _NonValutabile()
+    if isinstance(node, ast.Attribute):
+        # `(pi.real)`: il punto e' nella classe di caratteri, ed `eval` legge
+        # gli attributi di un numero. Si seguono quelli che danno un numero;
+        # il resto (`.hex`, `.__class__`) e' una funzione o una classe, cioe'
+        # un testo lasciato com'era anche dal motore.
+        v = _valuta(node.value)
+        if (isinstance(v, (int, float)) and not isinstance(v, bool)
+                and node.attr in _NUMERIC_ATTRIBUTES):
+            return getattr(v, node.attr)
+        if (isinstance(v, (int, float)) and not isinstance(v, bool)
+                and node.attr in _NUMERIC_METHODS):
+            return getattr(v, node.attr)
+        raise _NonValutabile()
+    if isinstance(node, ast.Call) and not node.keywords:
+        f = _valuta(node.func)
+        if callable(f) and getattr(f, '__name__', None) in _NUMERIC_METHODS \
+                and getattr(f, '__self__', None) is not None:
+            try:
+                return f(*[_valuta(a) for a in node.args])
+            except (TypeError, ValueError, ArithmeticError):
+                raise _NonValutabile()
+        if f not in _LOAD_TIME_FUNCTIONS.values():
+            raise _NonValutabile()
+        args = [_valuta(a) for a in node.args]
+        try:
+            return f(*args)
+        except (TypeError, ValueError, ArithmeticError):
+            raise _NonValutabile()
+    raise _NonValutabile()
+
+
+def _valuta_pezzo(testo: str):
+    """Un pezzo fra parentesi, come lo valuta `evaluate_match`: il numero,
+    o None quando il motore lascia il testo (eccezione, o un risultato che
+    non e' un numero)."""
+    try:
+        albero = ast.parse(testo, mode='eval')
+        risultato = _valuta(albero)
+    except (SyntaxError, ValueError, _NonValutabile, RecursionError):
+        return None
+    if isinstance(risultato, bool) or not isinstance(risultato, (int, float)):
+        return None
+    return risultato
+
+
+def load_time_value(text: str):
+    """Cio' che `_eval_math_expressions` fa di una stringa: un numero, o il
+    testo (eventualmente con i pezzi fra parentesi sostituiti)."""
+    def sostituisci(match):
+        valore = _valuta_pezzo(match.group(1))
+        return match.group(0) if valore is None else str(valore)
+
+    valutato = _LOAD_TIME_PATTERN.sub(sostituisci, text)
+    try:
+        return float(valutato) if '.' in valutato else int(valutato)
+    except ValueError:
+        return valutato
+
+
+def _numero(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def half_evaluated_proposal(text: str) -> Optional[str]:
+    """La grafia da proporre se il caricamento valuterebbe `text` a meta'
+    (PGE #309), o None.
+
+    Mirror di `find_half_evaluated` + `_probe_whole_expression`: una stringa
+    con delle parentesi, non tutta fra parentesi, che cosi' com'e' non
+    diventa un numero (`-(90/2)` lo diventa) e che messa INTERA fra parentesi
+    si'. `voce (1).wav` fra parentesi non e' un numero, e passa."""
+    if not isinstance(text, str):
+        return None
+    if not ('(' in text and ')' in text) or outer_parenthesized(text):
+        return None
+    if _numero(load_time_value(text)):
+        return None
+    proposta = f"({text.strip()})"
+    return proposta if _numero(load_time_value(proposta)) else None

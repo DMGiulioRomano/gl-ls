@@ -55,6 +55,7 @@ VALIDI = {
     "309": "  volume: (max(-12, -6))\n  grain:\n    duration: (pow(10, -2))\n",
     "t": "  pan: (sin(t) * 90)\n",
     "costante-ovunque": "  pointer:\n    speed_ratio: (10/2)\n",
+    "gia-un-numero": "  pan: -(90/2)\n",
 }
 
 
@@ -348,3 +349,18 @@ def test_semantic_token_dell_espressione():
         line += data[i]
         lines_with_tokens.add(line)
     assert row in lines_with_tokens
+
+
+def test_meta_valutata_nei_campi_a_espressione():
+    d = diags("  volume: (10/2)/10\n")
+    assert [x.code for x in d] == ["engine-expr"]
+    assert d[0].data == {"fix": {"kind": "rename-value", "new": "((10/2)/10)"}}
+
+
+@pytest.mark.parametrize("testo, atteso", [
+    ("(10/2)/10", "5.0/10"), ("-(90/2)", -45.0), ("(max(3, 7))", 7),
+    ("voce (1).wav", "voce 1.wav"), ("(abs)", "(abs)"), ("(1,2)", "(1,2)"),
+])
+def test_load_time_value(testo, atteso):
+    v = EX.load_time_value(testo)
+    assert v == atteso and type(v) is type(atteso)

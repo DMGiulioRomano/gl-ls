@@ -2273,6 +2273,20 @@ def _check_engine_expressions(bag: Bag, bpath: KeyPath, local: Dict[str, Any],
                             f"{c.problem.reason}.{hint}",
                             code="engine-expr", prefer_value=True)
                 continue
+            # Senza parentesi esterne la stringa passa prima dalla
+            # valutazione al caricamento: `-(90/2)` diventa un numero, e
+            # `(10/2)/10` e' la meta' valutata, un altro errore del motore.
+            if not isinstance(EX.load_time_value(text), str):
+                continue
+            proposta = EX.half_evaluated_proposal(text)
+            if proposta is not None:
+                bag.add(where, f"'{dotted}': '{text}' sta per meta' fuori "
+                        "dalle parentesi esterne, e il caricamento ne "
+                        "valuterebbe solo un pezzo: e' un errore dell'engine. "
+                        f"Scrivila tutta fra parentesi, {proposta}.",
+                        code="engine-expr", prefer_value=True,
+                        data={"fix": {"kind": "rename-value", "new": proposta}})
+                continue
             c = EX.compile_expression(text, variables)
             if c.ok:
                 bag.add(where, f"'{dotted}': un'espressione si scrive fra "
