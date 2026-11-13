@@ -11,6 +11,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import engine_info as EI
 from .convert import as_num as _num
 from .yamlpos import Document, KeyPath
 
@@ -210,6 +211,19 @@ class StudyModel:
         None se non dichiarata — cioe' ``seconds``, da PGE v9 senza piu'
         ereditarieta' da ``time_mode`` — o se non e' una stringa."""
         v = self._engine_value(stream, ("pointer", "loop_unit"))
+        return v if isinstance(v, str) else None
+
+    def range_unit_for(self, stream: Optional[str] = None,
+                       band: str = "grain.duration_range") -> Optional[str]:
+        """La ``<param>_range_unit`` in vigore sulla banda ``band`` per uno
+        stream (o per il documento), con la stessa eredita' di
+        ``loop_unit_for``. None se la banda non ha una chiave d'unita', se la
+        chiave non e' dichiarata (cioe' ``absolute``) o se non e' una
+        stringa."""
+        key = EI.RANGE_UNIT_PATHS.get(band)
+        if key is None:
+            return None
+        v = self._engine_value(stream, tuple(key.split(".")))
         return v if isinstance(v, str) else None
 
     def sample_for(self, stream: Optional[str] = None) -> Optional[str]:

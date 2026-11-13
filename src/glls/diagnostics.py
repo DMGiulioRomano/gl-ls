@@ -124,6 +124,7 @@ def collect(doc: Document, m: StudyModel) -> List[types.Diagnostic]:
     _check_engine_block(bag, doc, m, ("base",))
     _check_axes_exclusive(bag, doc, m)
     _check_loop_unit(bag, doc)
+    _check_range_unit_band(bag, doc, m)
     _check_let_blocks(bag, doc, m)
     _check_unknown_keys(bag, doc, m)
     _check_corredi(bag, doc, m)
@@ -228,6 +229,13 @@ def _check_stack_duration(bag: Bag, doc: Document, m: StudyModel) -> None:
 # dall'unita' — 1/output_sr per ``samples``, 1e-3 per ``milliseconds``.
 # ``grain.iot`` segue la stessa unita' (PGE #311), anche se nell'engine la
 # scala un passo suo (``Stream._pre_normalize_grain_iot``).
+#
+# ``grain.duration_range`` ci sta **finche' e' una durata**: con
+# ``grain.duration_range_unit: relative`` (PGE #267) e' una frazione della
+# base, e una frazione non ha unita' da convertire — l'engine la lascia com'e'
+# scritta, e convertirla qui portava ``2.0`` sotto ``samples`` a ``4.2e-05``,
+# dentro i bounds, dove l'engine si ferma. La condizione la porta
+# ``range_relative`` (``_range_relative``), letta per blocco.
 _UNIT_SCALED = frozenset({"grain.duration", "grain.duration_range", "grain.iot"})
 
 
@@ -249,16 +257,40 @@ def _grain_unit(doc: Document, bpath: KeyPath) -> Optional[str]:
     return u
 
 
+def _range_relative(doc: Document, bpath: KeyPath) -> bool:
+    """La banda di ``grain.duration_range`` e' una frazione della base nel
+    blocco engine ``bpath`` (``grain.duration_range_unit: relative``).
+
+    Stessa eredita' di ``_grain_unit``: l'override per-stream se dichiarato,
+    altrimenti il base root. La lettura e' pura come quella dell'engine
+    (``range_unit_is_relative``): una grafia fuori vocabolario legge come
+    assoluta, e dire che e' sbagliata tocca a ``_check_range_unit_value``.
+    La chiave scritta vuota nello stream non ricade sul base: e' scritta."""
+    key = ("grain", "duration_range_unit")
+    local = doc.get(bpath + ("grain",))
+    if bpath != ("base",) and not (isinstance(local, dict)
+                                   and "duration_range_unit" in local):
+        return EI.range_unit_is_relative(doc.get(("base",) + key))
+    return EI.range_unit_is_relative(doc.get(bpath + key))
+
+
 def _check_bounds_value(
     bag: Bag, path: KeyPath, engine_path: str, v: Any, label: str,
-    grain_unit: Optional[str] = None,
+    grain_unit: Optional[str] = None, range_relative: bool = False,
 ) -> None:
     """Confronto coi bounds engine, che vivono in **secondi**.
 
     ``grain_unit`` e' l'unita' dichiarata dal blocco (``samples`` |
     ``milliseconds``): sui path che l'engine riscala il valore va portato in
-    secondi prima del confronto, e il messaggio porta entrambi i numeri."""
-    b = EI.bounds_for(engine_path)
+    secondi prima del confronto, e il messaggio porta entrambi i numeri.
+
+    ``range_relative`` dice che nel blocco la banda governata da una
+    ``<param>_range_unit`` e' una frazione della base: su quel path i bounds
+    sono il dominio relativo (``RELATIVE_RANGE_BOUNDS``, che *sostituisce*
+    quello assoluto) e nessuna unita' converte il numero."""
+    relative = range_relative and engine_path in EI.RANGE_UNIT_PATHS
+    b = EI.bounds_for(engine_path,
+                      EI.RANGE_UNIT_RELATIVE if relative else None)
     n = _num(v)
     if b is None or n is None:
         return
@@ -274,7 +306,11 @@ def _check_bounds_value(
                     code="out-of-bounds", prefer_value=True)
         return
     note = ""
-    if grain_unit is not None and engine_path in _UNIT_SCALED:
+    if relative:
+        note = (f" ({EI.RELATIVE_RANGE_UNIT}, "
+                f"{EI.RANGE_UNIT_PATHS[engine_path].split('.')[-1]}: "
+                f"{EI.RANGE_UNIT_RELATIVE})")
+    elif grain_unit is not None and engine_path in _UNIT_SCALED:
         note = EI.unit_note(n, grain_unit)
         n = n * EI.grain_duration_factor(grain_unit)
     lo, hi = b
@@ -565,10 +601,12 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
         engine_path = cfg.get("path", name)
         if isinstance(engine_path, str):
             grain_unit = _grain_unit(doc, ("base",))
+            range_relative = _range_relative(doc, ("base",))
             if "baseline" in cfg:
                 _check_bounds_value(bag, apath + ("baseline",), engine_path,
                                     cfg.get("baseline"), f"Asse '{name}' baseline",
-                                    grain_unit=grain_unit)
+                                    grain_unit=grain_unit,
+                                    range_relative=range_relative)
             elif engine_path == "grain.duration" and grain_unit is not None:
                 # Il default engine (0.05) e' in secondi e non viene convertito:
                 # finirebbe a valle come 0.05 campioni / 0.05 ms, sempre sotto
@@ -594,7 +632,8 @@ def _check_axes(bag: Bag, doc: Document, m: StudyModel) -> None:
                 for i, v in enumerate(vals):
                     _check_bounds_value(bag, apath + ("values", i), engine_path, v,
                                         f"Asse '{name}' values[{i}]",
-                                        grain_unit=grain_unit)
+                                        grain_unit=grain_unit,
+                                        range_relative=range_relative)
 
 
 def _check_band(bag: Bag, doc: Document, path: KeyPath, cfg: Dict[str, Any],
@@ -720,7 +759,8 @@ def _zone_last_time(zone: Any) -> Optional[float]:
 def _check_bp_group(bag: Bag, path: KeyPath, group: Any, label: str,
                     engine_path: Optional[str] = None,
                     grain_unit: Optional[str] = None,
-                    prev_time: Optional[float] = None) -> None:
+                    prev_time: Optional[float] = None,
+                    range_relative: bool = False) -> None:
     """I vincoli del BP group, piu' i bounds sui suoi punti.
 
     ``interp`` dell'insieme chiuso (fuori -> ``InvalidFieldValueError`` lato
@@ -781,7 +821,8 @@ def _check_bp_group(bag: Bag, path: KeyPath, group: Any, label: str,
             if y is not None:
                 _check_bounds_value(bag, ppath, engine_path, y,
                                     f"{engine_path} t={p[0]!r}",
-                                    grain_unit=grain_unit)
+                                    grain_unit=grain_unit,
+                                    range_relative=range_relative)
     first = _num(points[0][0]) if points and points[0] else None
     if prev_time is not None and first is not None and first <= prev_time:
         bag.add(path + (0, 0),
@@ -795,7 +836,8 @@ def _check_bp_group(bag: Bag, path: KeyPath, group: Any, label: str,
 
 def _check_bp_groups(bag: Bag, path: KeyPath, form: Any, label: str,
                      engine_path: Optional[str] = None,
-                     grain_unit: Optional[str] = None) -> bool:
+                     grain_unit: Optional[str] = None,
+                     range_relative: bool = False) -> bool:
     """Valida i BP group di un envelope, diretto o misto. True se ce n'erano.
 
     Forma **diretta**: l'envelope *e'* un gruppo (una sola macrozona). Forma
@@ -804,7 +846,8 @@ def _check_bp_groups(bag: Bag, path: KeyPath, form: Any, label: str,
     forma i controlli pensati per i breakpoint nudi — i tempi qui sono
     assoluti."""
     if looks_like_bp_group(form):
-        _check_bp_group(bag, path, form, label, engine_path, grain_unit)
+        _check_bp_group(bag, path, form, label, engine_path, grain_unit,
+                        range_relative=range_relative)
         return True
     if not isinstance(form, (list, tuple)):
         return False
@@ -828,7 +871,8 @@ def _check_bp_groups(bag: Bag, path: KeyPath, form: Any, label: str,
     for i, zone in enumerate(form):
         if looks_like_bp_group(zone):
             _check_bp_group(bag, path + (i,), zone, f"{label} zona {i}",
-                            engine_path, grain_unit, prev_time=prev)
+                            engine_path, grain_unit, prev_time=prev,
+                            range_relative=range_relative)
         last = _zone_last_time(zone)
         if last is not None:
             prev = last
@@ -1843,6 +1887,7 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
                     f"{EI.PARAMS['grain.duration'].default:g} e' in secondi, non "
                     f"in {label}).",
                     code="grain-unit-duration")
+        _check_range_unit_value(bag, bpath, grain)
     pointer = base.get("pointer")
     if isinstance(pointer, dict):
         _check_loop_unit_value(bag, bpath, pointer)
@@ -1859,6 +1904,7 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
                     code="loop-order", prefer_value=True)
     # bounds sui parametri noti (scalari ed envelope)
     grain_unit = _grain_unit(doc, bpath)
+    range_relative = _range_relative(doc, bpath)
     for dotted, info in EI.PARAMS.items():
         parts = tuple(dotted.split("."))
         if parts[0] in ("onset", "duration") and len(parts) == 1:
@@ -1874,7 +1920,8 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
         if v is None:
             continue
         _check_param_bounds(bag, bpath + parts, dotted, v, m,
-                            grain_unit=grain_unit)
+                            grain_unit=grain_unit,
+                            range_relative=range_relative)
 
 
 # ---------------------------------------------------------------------------
@@ -2723,6 +2770,118 @@ def _check_loop_unit(bag: Bag, doc: Document) -> None:
                 if isinstance(doc.get(site), dict) and doc.get(site) else None)
 
 
+def _check_range_unit_value(bag: Bag, bpath: KeyPath,
+                            grain: Dict[str, Any]) -> None:
+    """Il valore di ``grain.duration_range_unit``, quando la chiave e' scritta
+    nel blocco (PGE #267).
+
+    Vocabolario chiuso — ``absolute`` | ``relative`` — validato dall'engine
+    (``ParameterOrchestrator._range_unit_from_spec``) con
+    ``InvalidFieldValueError``. La chiave **vuota** e' un caso a se': l'engine
+    distingue assente da nullo (``_KEY_ABSENT``) proprio per non leggerla come
+    il default, che e' il silenzio piu' muto possibile — nel file non resta
+    niente da cui accorgersi che la riga non e' stata letta."""
+    if "duration_range_unit" not in grain:
+        return
+    unit = grain["duration_range_unit"]
+    upath = bpath + ("grain", "duration_range_unit")
+    vocabolario = " | ".join(EI.RANGE_UNITS)
+    if unit is None:
+        bag.add(upath,
+                "duration_range_unit scritta e lasciata vuota: l'engine non la "
+                f"legge come il default '{EI.RANGE_UNIT_DEFAULT}', la rifiuta "
+                f"({vocabolario}). Scrivi l'unita', o togli la riga per la "
+                "banda assoluta.",
+                code="range-unit-vuota")
+        return
+    if unit in EI.RANGE_UNITS:
+        return
+    sug = (_suggest(str(unit), list(EI.RANGE_UNITS))
+           if isinstance(unit, str) else None)
+    extra = f" Forse '{sug}'?" if sug else ""
+    bag.add(upath,
+            f"duration_range_unit '{unit}' non ammessa ({vocabolario}).{extra}",
+            code="range-unit-sconosciuta", prefer_value=True,
+            data={"fix": {"kind": "rename-value", "new": sug}} if sug else None)
+
+
+def _dotted_reaches(node: Any, target: str) -> bool:
+    """Una chiave puntata ``target`` (o un suo discendente, come
+    ``base.grain.duration_range.values``) compare da qualche parte in
+    ``node``: ``spread.over``, ``versions:``, ``percorso:``, ``for_each``."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str) and (key == target
+                                         or key.startswith(target + ".")):
+                return True
+            if _dotted_reaches(value, target):
+                return True
+    elif isinstance(node, (list, tuple)):
+        return any(_dotted_reaches(v, target) for v in node)
+    return False
+
+
+def _check_range_unit_band(bag: Bag, doc: Document, m: StudyModel) -> None:
+    """``relative`` senza una banda da leggere come frazione.
+
+    L'engine pretende la ``duration_range`` esplicita sotto ``relative``
+    (``MissingFieldError``): senza, varrebbe il jitter implicito, che e'
+    assoluto, e la chiave non direbbe niente. Si guarda il ``grain``
+    **efficace** di ogni stream (base di documento merged con l'override),
+    come ``_check_loop_unit``: una banda dichiarata nello stream basta per lo
+    stream, e un difetto del base si rileva una volta sola, sulla sua chiave,
+    nominando gli stream che lo ereditano.
+
+    La banda puo' arrivare anche da fuori del blocco: un asse il cui path e'
+    la banda, o una chiave puntata ``base.grain.duration_range`` (``spread.over``,
+    ``versions:``, ``percorso:``, ``for_each``). Limite accettato: un'unita'
+    mossa da un asse o da una chiave puntata non si vede, e la lettura resta
+    quella statica del blocco."""
+    data = doc.data
+    if not isinstance(data, dict):
+        return
+    band_dotted = "base." + "grain.duration_range"
+    base = data.get("base") if isinstance(data.get("base"), dict) else {}
+    base_grain = base.get("grain") if isinstance(base.get("grain"), dict) else {}
+    streams = data.get("streams") if isinstance(data.get("streams"), dict) else {}
+    fuori = (any(ax.path == "grain.duration_range" for ax in m.axes.values())
+             or _dotted_reaches({k: v for k, v in data.items()
+                                 if k != "streams" and not schema.is_private_key(k)},
+                                band_dotted))
+    if fuori:
+        return
+    voci = list(streams.items()) or [(None, {})]
+    siti: Dict[KeyPath, List[str]] = {}
+    for name, entry in voci:
+        entry = entry if isinstance(entry, dict) else {}
+        override = entry.get("base") if isinstance(entry.get("base"), dict) else {}
+        ov_grain = (override.get("grain")
+                    if isinstance(override.get("grain"), dict) else {})
+        if "duration_range_unit" in ov_grain:
+            unit = ov_grain["duration_range_unit"]
+            site: KeyPath = ("streams", name, "base", "grain", "duration_range_unit")
+        else:
+            unit = base_grain.get("duration_range_unit")
+            site = ("base", "grain", "duration_range_unit")
+        if not EI.range_unit_is_relative(unit):
+            continue
+        if {**base_grain, **ov_grain}.get("duration_range") is not None:
+            continue
+        if _dotted_reaches(entry, band_dotted):
+            continue
+        names = siti.setdefault(site, [])
+        if name is not None and site[0] == "base":
+            names.append(str(name))
+    for site, names in siti.items():
+        chi = (f" Lo ereditano senza banda: {', '.join(names)}." if names else "")
+        bag.add(site,
+                "duration_range_unit: relative senza una 'duration_range': la "
+                "banda va dichiarata esplicitamente come frazione della durata "
+                "base (senza, varrebbe il jitter implicito, che e' assoluto) — "
+                f"l'engine si ferma al parse.{chi}",
+                code="range-unit-senza-banda")
+
+
 def _loop_unit_anchor(doc: Document, site: KeyPath) -> KeyPath:
     """Dove appendere il rilievo: il blocco ``pointer:`` se esiste.
 
@@ -2738,14 +2897,17 @@ def _loop_unit_anchor(doc: Document, site: KeyPath) -> KeyPath:
 
 
 def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
-                        m: StudyModel, grain_unit: Optional[str] = None) -> None:
+                        m: StudyModel, grain_unit: Optional[str] = None,
+                        range_relative: bool = False) -> None:
     if _num(v) is not None:
-        _check_bounds_value(bag, path, dotted, v, dotted, grain_unit=grain_unit)
+        _check_bounds_value(bag, path, dotted, v, dotted, grain_unit=grain_unit,
+                            range_relative=range_relative)
         return
     # BP group, diretto o misto (PGE #64): i punti del gruppo vengono validati
     # e confrontati coi bounds la' dentro, sui loro tempi assoluti. Senza
     # questo ramo un gruppo passava muto e i suoi Y non venivano mai visti.
-    if _check_bp_groups(bag, path, v, dotted, dotted, grain_unit):
+    if _check_bp_groups(bag, path, v, dotted, dotted, grain_unit,
+                        range_relative):
         return
     pts: Optional[list] = None
     ppath = path
@@ -2756,7 +2918,8 @@ def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
     elif isinstance(v, dict) and isinstance(v.get("points"), list):
         pts = v["points"]
         ppath = path + ("points",)
-        if _check_bp_groups(bag, ppath, pts, dotted, dotted, grain_unit):
+        if _check_bp_groups(bag, ppath, pts, dotted, dotted, grain_unit,
+                            range_relative):
             return
     if not pts:
         return
@@ -2765,7 +2928,8 @@ def _check_param_bounds(bag: Bag, path: KeyPath, dotted: str, v: Any,
             y = _num(p[1])
             if y is not None:
                 _check_bounds_value(bag, ppath + (i,), dotted, y,
-                                    f"{dotted} t={p[0]!r}", grain_unit=grain_unit)
+                                    f"{dotted} t={p[0]!r}", grain_unit=grain_unit,
+                                    range_relative=range_relative)
             if len(p) == 3 and p[2] not in EI.INTERPOLATIONS:
                 bag.add(ppath + (i,),
                         f"{dotted}: type per-punto '{p[2]}' non valido "
@@ -2905,6 +3069,7 @@ def _check_for_each(bag: Bag, doc: Document, m: StudyModel) -> None:
                 code="for-each-type")
         return
     grain_unit = _grain_unit(doc, ("base",))
+    range_relative = _range_relative(doc, ("base",))
     for key, val in block.items():
         if not isinstance(key, str) or key in schema.FOR_EACH_RESERVED:
             continue
@@ -2945,7 +3110,8 @@ def _check_for_each(bag: Bag, doc: Document, m: StudyModel) -> None:
         vpath = kp + (("values",) if isinstance(val, dict) else ())
         for i, v in enumerate(values):
             _check_bounds_value(bag, vpath + (i,), dotted, v,
-                                f"for_each['{key}'][{i}]", grain_unit=grain_unit)
+                                f"for_each['{key}'][{i}]", grain_unit=grain_unit,
+                                range_relative=range_relative)
 
 
 # Le chiavi che lo schema tiene solo per diagnosticarle (``kind="deprecated"``),

@@ -92,6 +92,10 @@ Language server (LSP) per il **linguaggio di granulazione** degli
 - **la banda dei `_range`** (PGE v9): `distribution_mode` (`uniform` |
   `gaussian`) e `range_anchor` (`center` | `min`) a vocabolario chiuso — e
   `distribution_mode` non e' piu' scambiata per `distribution`;
+- **la banda relativa** (PGE #267): `grain.duration_range_unit` (`absolute`
+  | `relative`) a vocabolario chiuso; sotto `relative` la `duration_range` e'
+  una frazione della base, in [0, 1], che `duration_unit` non converte, e una
+  banda va dichiarata;
 - **mappe caotiche** (PGE #307): `maps:` dentro `base:` (nomi liberi, ogni
   mappa a vocabolario chiuso, i sei tipi del catalogo piu' `custom` con le sue
   equazioni `x:`/`y:`), con le regole che il motore applica al caricamento —
