@@ -209,6 +209,26 @@ Tre strati, tutti puri e testabili senza LSP:
   lettura e' uno dei possibili, e l'etichetta lo nomina invece di tacerlo.
   Senza file (buffer non salvato, sample assente) nessun numero: meglio
   nessuna risposta che una durata indovinata.
+- **Una banda relativa non ha unita'** (gl-ls #49, PGE #267).
+  `grain.duration_range_unit: relative` fa di `grain.duration_range` una
+  frazione della durata base, letta istante per istante. Tre conseguenze, una
+  per lato del mirror. La chiave entra nel vocabolario chiuso di `grain`, a
+  valori `absolute` | `relative` (assente vale `absolute`; vuota o fuori
+  vocabolario e' errore, perche' l'engine distingue assente da nullo), e
+  `relative` senza una banda dichiarata — nel blocco efficace, in un asse o in
+  una chiave puntata — e' l'errore che l'engine alza al parse. La conversione
+  d'unita' (`diagnostics._UNIT_SCALED`, mirror di
+  `Stream._pre_normalize_grain_params`) si ferma alla base: una frazione non
+  si converte, e convertirla portava `2.0` sotto `samples` a `4.2e-05`, dentro
+  i bounds dove l'engine si ferma. E i bounds della banda diventano il dominio
+  relativo (`RELATIVE_RANGE_BOUNDS`), che **sostituisce** quello assoluto: i
+  due `1` coincidono per caso, e `engine_info` li tiene come due numeri.
+  L'unita' si legge per blocco con l'eredita' di `duration_unit` (override,
+  altrimenti `base:`), e `info_for` la porta all'hover. La banda governata da
+  una chiave d'unita' e' `RANGE_UNIT_PATHS`, mirror di
+  `ParameterSpec.range_unit_path`: `test_snapshot_engine_range_unit.py` la
+  confronta col motore quando c'e', cosi' cablare la banda relativa su un
+  secondo parametro, lato engine, fa diventare rosso qui.
 
 ## Limiti noti
 

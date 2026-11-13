@@ -29,14 +29,17 @@ def _md(value: str, rng: Optional[types.Range] = None) -> types.Hover:
 
 
 
-def _bounds_line(dotted: str, loop_unit: Optional[str] = None) -> str:
+def _bounds_line(dotted: str, loop_unit: Optional[str] = None,
+                 range_unit: Optional[str] = None) -> str:
     """La riga bounds/default di un path engine.
 
     Passa da ``engine_info`` per la formattazione: un parametro puo' non avere
     bounds numerici affatto (``grain.envelope`` e' un nome di finestra) e un
-    default puo' non essere un numero. ``loop_unit`` e' quella in vigore dove
-    il valore vive: l'unita' di una posizione nel sample dipende da lei."""
-    info = EI.info_for(dotted, loop_unit)
+    default puo' non essere un numero. ``loop_unit`` e ``range_unit`` sono
+    quelle in vigore dove il valore vive: l'unita' di una posizione nel sample
+    dipende dalla prima, unita' e bounds di una banda relativa dalla seconda
+    (``grain.duration_range_unit``, PGE #267)."""
+    info = EI.info_for(dotted, loop_unit, range_unit)
     if not info:
         return ""
     return (f"\n\n`{dotted}` — **{EI.bounds_phrase(info)}** · "
@@ -59,7 +62,8 @@ def _axis_summary(m: StudyModel, name: str) -> str:
     else:
         parts.append("X: linear (tempi equispaziati, la Y possiede n)")
     if ax.path:
-        parts.append(_bounds_line(ax.path, m.loop_unit_for()).strip())
+        parts.append(_bounds_line(ax.path, m.loop_unit_for(),
+                                  m.range_unit_for()).strip())
     return "\n\n".join(p for p in parts if p)
 
 
@@ -99,7 +103,8 @@ def hover(doc: Document, m: StudyModel, line: int, character: int,
 def _hover_over_key(doc: Document, path: KeyPath, dotted: str,
                     rng: Optional[types.Range],
                     intro: str = "",
-                    loop_unit: Optional[str] = None) -> Optional[types.Hover]:
+                    loop_unit: Optional[str] = None,
+                    range_unit: Optional[str] = None) -> Optional[types.Hover]:
     """Hover di una entry di ``over``: chiave del contesto annidato oppure
     resto di una dotted ``over.<path>`` al primo livello di ``spread:``."""
     split = split_over_key(dotted, doc.get(path))
@@ -113,13 +118,15 @@ def _hover_over_key(doc: Document, path: KeyPath, dotted: str,
         if mk is not None:
             text += f"\n\n**`{marker}`** — {mk.doc}"
         info = EI.PARAMS.get(head[5:]) if head.startswith("base.") else None
-        return _md(text + (_bounds_line(head[5:], loop_unit) if info else ""), rng)
+        return _md(text + (_bounds_line(head[5:], loop_unit, range_unit)
+                           if info else ""), rng)
     info = EI.PARAMS.get(dotted[5:]) if dotted.startswith("base.") else None
     base = (f"{intro}i valori della strategy finiscono in `{dotted}` di ogni "
             "stream generato." if intro else
             f"Path puntato nel documento: i valori della strategy finiscono "
             f"in `{dotted}` di ogni stream generato.")
-    return _md(base + (_bounds_line(dotted[5:], loop_unit) if info else ""), rng)
+    return _md(base + (_bounds_line(dotted[5:], loop_unit, range_unit)
+                       if info else ""), rng)
 
 
 def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
@@ -170,10 +177,12 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
         if rest is not None:
             return _hover_over_key(doc, path, rest, rng,
                                    intro="Forma dotted di `over`: ",
-                                   loop_unit=m.loop_unit_for(_stream_of(path)))
+                                   loop_unit=m.loop_unit_for(_stream_of(path)),
+                                   range_unit=m.range_unit_for(_stream_of(path)))
     if ctx == "over":
         return _hover_over_key(doc, path, str(name), rng,
-                               loop_unit=m.loop_unit_for(_stream_of(path)))
+                               loop_unit=m.loop_unit_for(_stream_of(path)),
+                               range_unit=m.range_unit_for(_stream_of(path)))
     if ctx == "let":
         # manopole a nomi liberi: l'unico sapere da dare e' la forma del valore
         # (la compatta e' posizionale, si legge male a occhio)
@@ -187,7 +196,9 @@ def _hover_key(doc: Document, m: StudyModel, path: KeyPath,
     if ctx in ("engine_stream", "grain", "pointer", "pitch", "voices"):
         dotted = _dotted_engine_path(path)
         if dotted:
-            text += _bounds_line(dotted, m.loop_unit_for(_stream_of(path)))
+            stream = _stream_of(path)
+            text += _bounds_line(dotted, m.loop_unit_for(stream),
+                                 m.range_unit_for(stream))
     if str(name) == "unit" and ctx == "walk" and len(path) >= 2:
         walk = m.walk_for(str(path[-2]))
         if walk:
@@ -231,7 +242,7 @@ def _hover_for_each_axis(m: StudyModel, key: str,
             f"combinazione (label `{key}=<valore>`, unite da `__`).")
     dotted = key[len("base."):] if key.startswith("base.") else None
     if dotted in EI.PARAMS:
-        text += _bounds_line(dotted, m.loop_unit_for())
+        text += _bounds_line(dotted, m.loop_unit_for(), m.range_unit_for())
     return _md(text, rng)
 
 
@@ -382,7 +393,8 @@ def _hover_value(doc: Document, m: StudyModel, path: KeyPath,
             return _md(f"**{value}** — {EI.X_UNITS[value]}", rng)
         if parent_key == "path" and value in EI.PARAMS:
             return _md(f"`{value}` — {EI.PARAMS[value].doc}"
-                       f"{_bounds_line(value, m.loop_unit_for())}", rng)
+                       f"{_bounds_line(value, m.loop_unit_for(), m.range_unit_for())}",
+                       rng)
 
     # density: zona percettiva
     if n is not None and _is_density_value(m, path):
@@ -410,8 +422,10 @@ def _hover_value(doc: Document, m: StudyModel, path: KeyPath,
     # valore di un parametro engine noto
     dotted = _dotted_engine_path(path[:-1] if isinstance(path[-1], int) else path)
     if dotted and n is not None:
+        stream = _stream_of(path)
         text = (f"`{dotted}` = {fmt_num(n)}"
-                + _bounds_line(dotted, m.loop_unit_for(_stream_of(path))))
+                + _bounds_line(dotted, m.loop_unit_for(stream),
+                               m.range_unit_for(stream)))
         if dotted == "density":
             text += f"\n\n{EI.density_zone(n)}"
         return _md(text, rng)

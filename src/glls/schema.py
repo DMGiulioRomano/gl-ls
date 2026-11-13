@@ -398,6 +398,20 @@ RANGE_ANCHOR_DOC = (
     "del parametro: l'engine lo verifica al parse. Fuori vocabolario e' un "
     "`InvalidFieldValueError`."
 )
+RANGE_UNIT_DOC = (
+    "**Unita' della banda `duration_range`** (PGE #267): `absolute` "
+    "(default, la lettura storica: una larghezza nell'unita' di "
+    "`duration_unit`) | `relative` (una **frazione della durata base**, letta "
+    "istante per istante: banda `frazione × |duration(t)|`, dominio [0, 1]). "
+    "Serve quando la base spazia su piu' ordini di grandezza — da un campione "
+    "a 500 ms — e una banda assoluta cambierebbe carattere da sola lungo "
+    "l'envelope. Con `relative` la frazione e' adimensionale: `duration_unit` "
+    "converte la sola base, e il dominio relativo **sostituisce** quello "
+    "assoluto (che sia 1 in entrambi e' una coincidenza). Pretende una "
+    "`duration_range` esplicita (senza, varrebbe il jitter implicito, che e' "
+    "assoluto). Assente e' `absolute`; scritta e lasciata vuota, o fuori "
+    "vocabolario, e' un `InvalidFieldValueError`."
+)
 
 _LET_DOC_SPREAD = (
     "**Manopole di voce.** Blocco `let:` dentro `spread:`, accanto a `n`/`over`: "
@@ -482,7 +496,8 @@ _ENGINE_STREAM_KEYS = [
     _k("volume_range", "±dB randomizzazione per grano."),
     _k("pan", "Gradi: 0 centro, ±180 estremi. Bounds [-3600, 3600]."),
     _k("pan_range", "±gradi randomizzazione per grano."),
-    _k("grain", "Blocco grano: duration, duration_range, duration_unit, "
+    _k("grain", "Blocco grano: duration, duration_range (+ "
+                "duration_range_unit), duration_unit, "
                 "envelope (finestra), reverse | read_direction, iot.",
        snippet="grain:\n  duration: ${1:0.05}\n  envelope: ${2:hanning}"),
     _k("pointer", "Posizione di lettura nel sample: start, speed_ratio, "
@@ -525,7 +540,11 @@ _GRAIN_KEYS = [
                    "[1 campione, 10 s] — sono in **secondi**, i valori si "
                    "convertono prima del confronto. Scalare o envelope."),
     _k("duration_range", "± randomizzazione della durata per grano, nell'unita' "
-                         "di `duration_unit`."),
+                         "di `duration_unit` — salvo con "
+                         "`duration_range_unit: relative`, dove e' una "
+                         "frazione della durata base, adimensionale, in "
+                         "[0, 1], e l'unita' non la converte."),
+    _k("duration_range_unit", RANGE_UNIT_DOC, values=EI.RANGE_UNITS),
     _k("duration_unit", "`seconds` (default) | `samples` (campioni a 48 kHz) | "
                         "`milliseconds` (fattore fisso 1e-3, non dipende da "
                         "`output_sr`). Convertita al parse. Con un'unita' "

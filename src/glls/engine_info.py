@@ -88,7 +88,9 @@ PARAMS: Dict[str, ParamInfo] = {
     "grain.duration_range": ParamInfo(0, 1, None, "±s",
         "Randomizzazione ± della durata per grano, nell'unita' di "
         "`grain.duration_unit`. La banda ha bounds suoi, molto piu' stretti "
-        "del valore: 1 s, non i 10 s di `grain.duration`."),
+        "del valore: 1 s, non i 10 s di `grain.duration`. Con "
+        "`grain.duration_range_unit: relative` (PGE #267) e' invece una "
+        "frazione della durata base, adimensionale, in [0, 1]."),
     "grain.envelope": ParamInfo(None, None, "hanning", "nome di finestra",
         "Finestra del grano: un nome, non un numero — nessun bound da "
         "confrontare (`variation_mode='choice'`). I nomi ammessi sono in "
@@ -252,10 +254,10 @@ NEEDS_BASELINE = frozenset(
 ) | frozenset({"pitch"})
 
 
-def bounds_for(path: str) -> Optional[Tuple[Optional[float], Optional[float]]]:
-    info = PARAMS.get(path)
-    if info is None and (path == "pitch" or path.startswith("pitch.")):
-        return None
+def bounds_for(path: str, range_unit: Optional[str] = None,
+               ) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    """I bounds di un path engine; ``range_unit`` come in ``info_for``."""
+    info = info_for(path, range_unit=range_unit)
     return (info.min, info.max) if info else None
 
 
@@ -415,18 +417,74 @@ POSITION_PATHS = frozenset(f"pointer.{k}" for k in LOOP_UNIT_SCOPE)
 NORMALIZED_POSITION_UNIT = "frazione della durata del sample"
 
 
-def info_for(dotted: str, loop_unit: Optional[str] = None) -> Optional[ParamInfo]:
-    """La riga di ``PARAMS`` letta con la ``loop_unit`` in vigore.
+def info_for(dotted: str, loop_unit: Optional[str] = None,
+             range_unit: Optional[str] = None) -> Optional[ParamInfo]:
+    """La riga di ``PARAMS`` letta con le unita' in vigore.
 
     Lo snapshot dichiara le posizioni in secondi, che e' il default: con
     ``loop_unit: normalized`` lo stesso numero e' una frazione del sample, e
     un hover che dicesse «s» su ``loop_end: 0.36`` affermerebbe il falso.
-    Solo l'unita' cambia: i bounds restano quelli dichiarati, il massimo
-    dinamico (la durata del sample) non si confronta comunque."""
+    Li' solo l'unita' cambia: i bounds restano quelli dichiarati, il massimo
+    dinamico (la durata del sample) non si confronta comunque.
+
+    ``range_unit`` e' la grafia della ``<param>_range_unit`` che governa la
+    banda ``dotted`` (``RANGE_UNIT_PATHS``). Sotto ``relative`` cambiano
+    unita' **e** bounds: il dominio relativo sostituisce quello assoluto
+    (``relative_range_bounds`` dell'engine), non lo restringe."""
     info = PARAMS.get(dotted)
-    if info is None or dotted not in POSITION_PATHS or loop_unit != "normalized":
+    if info is None:
+        return None
+    if dotted in RANGE_UNIT_PATHS and range_unit_is_relative(range_unit):
+        lo, hi = RELATIVE_RANGE_BOUNDS
+        return replace(info, min=lo, max=hi, unit=RELATIVE_RANGE_UNIT)
+    if dotted not in POSITION_PATHS or loop_unit != "normalized":
         return info
     return replace(info, unit=NORMALIZED_POSITION_UNIT)
+
+# ---------------------------------------------------------------------------
+# L'unita' della banda: ``<param>_range_unit`` (PGE #267).
+#
+# Con ``relative`` il numero scritto nella banda non e' piu' una larghezza
+# nell'unita' del parametro, ma una **frazione del valore base** letta istante
+# per istante: banda ``frazione × |base(t)|``. Mirror di
+# ``pge.parameters.parameter_definitions`` (``RANGE_UNITS``,
+# ``RANGE_UNIT_DEFAULT``, ``RELATIVE_RANGE_BOUNDS``, ``range_unit_is_relative``)
+# e di ``ParameterSpec.range_unit_path``; ``test_snapshot_engine_range_unit.py``
+# li confronta col motore quando c'e'.
+
+RANGE_UNIT_ABSOLUTE = "absolute"
+RANGE_UNIT_RELATIVE = "relative"
+
+#: Grafie ammesse, la prima canonica. Fuori di qui (la chiave **vuota**
+#: compresa: l'engine distingue assente da nullo) e' ``InvalidFieldValueError``.
+RANGE_UNITS = (RANGE_UNIT_ABSOLUTE, RANGE_UNIT_RELATIVE)
+
+#: Chiave assente: assoluto, la lettura storica bit per bit.
+RANGE_UNIT_DEFAULT = RANGE_UNIT_ABSOLUTE
+
+#: Dominio della banda relativa. E' della **modalita'**, non del parametro: che
+#: coincida col ``max_range`` assoluto di ``grain_duration`` (1 s) e' una
+#: coincidenza numerica che l'engine dichiara come tale — alzarne uno non alza
+#: l'altro, e per questo qui sono due numeri e non uno.
+RELATIVE_RANGE_BOUNDS = (0.0, 1.0)
+
+#: L'unita' di una banda relativa, come la dicono hover e diagnostica.
+RELATIVE_RANGE_UNIT = "frazione della base"
+
+#: Banda (path YAML) -> chiave che ne dichiara l'unita' (path YAML). Mirror di
+#: ``ParameterSpec.range_path`` -> ``range_unit_path``: oggi un parametro solo,
+#: l'unico la cui base spazia per costruzione su piu' ordini di grandezza.
+RANGE_UNIT_PATHS: Dict[str, str] = {
+    "grain.duration_range": "grain.duration_range_unit",
+}
+
+
+def range_unit_is_relative(unit: object) -> bool:
+    """True se la grafia dichiara una banda relativa.
+
+    Lettura **pura**, come quella dell'engine: una grafia sbagliata legge come
+    non-relativa, e dire che e' sbagliata tocca a chi la valida."""
+    return unit == RANGE_UNIT_RELATIVE
 
 # ---------------------------------------------------------------------------
 # Verso di lettura del grano: ``grain.read_direction`` (PGE #207).
