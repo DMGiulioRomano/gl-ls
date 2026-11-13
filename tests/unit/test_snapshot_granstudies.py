@@ -10,7 +10,9 @@ data per i codici diagnostici (`test_codici.py`): non una dipendenza, ma una
 Vale la pena notare *cosa* aveva davvero divergito, perche' non e' quello che
 un import avrebbe chiuso: due dei tre path sbagliati venivano dai nomi di
 *registry* di granstudies (`num_voices` per `voices.num_voices`), e il floor
-di ``grain.duration`` e' una costante di studio che nell'engine non esiste.
+di ``grain.duration`` era allora una costante di studio (4 campioni) che
+nell'engine non esisteva — granulation-studies l'ha tolta dopo (gl-ls #47), e
+il floor e' tornato il campione dell'engine.
 ``pge.api.parameter_bounds()`` non avrebbe detto niente su nessuno dei due.
 Il confronto utile e' con **granstudies**, che di questi `study.yml` e' il
 runtime.
@@ -62,7 +64,8 @@ def test_la_frequenza_di_render_e_la_stessa():
 
 @needs_runtime
 def test_il_floor_di_grain_duration_e_quello_del_runtime():
-    assert gs_bounds.MIN_GRAIN_SAMPLES == EI.MIN_GRAIN_SAMPLES
+    """Un campione, senza rialzo di studio (gl-ls #47). Se granstudies
+    reintroducesse un floor suo, questo test cade prima dello studio."""
     lo, _ = gs_bounds.bounds_for("grain.duration",
                                  output_sr=gs_bounds.default_output_sr())
     assert lo == EI.PARAMS["grain.duration"].min
@@ -179,10 +182,12 @@ def _engine():
     from pge.parameters import pitch_unit  # type: ignore
     from pge.parameters.parameter_definitions import (  # type: ignore
         GRANULAR_PARAMETERS,
+        get_parameter_definition,
     )
     from pge.parameters.parameter_schema import ALL_SCHEMAS  # type: ignore
 
-    return GRANULAR_PARAMETERS, ALL_SCHEMAS, pitch_unit
+    return (GRANULAR_PARAMETERS, ALL_SCHEMAS, pitch_unit,
+            get_parameter_definition)
 
 
 # Prefisso YAML di ogni schema engine: i path di ``POINTER_PARAMETER_SCHEMA``
@@ -194,7 +199,7 @@ _SCHEMA_PREFIX = {"stream": "", "pointer": "pointer.", "pitch": "pitch.",
 
 def _specs():
     """``path YAML dotted -> ParameterSpec`` da tutti gli schema dell'engine."""
-    _, all_schemas, _ = _engine()
+    _, all_schemas, _, _ = _engine()
     return {_SCHEMA_PREFIX[name] + spec.yaml_path: spec
             for name, schema in all_schemas.items()
             for spec in schema}
@@ -202,20 +207,24 @@ def _specs():
 
 def _attesi(path, origin):
     """I bounds che l'engine dice per ``path``, o ``None`` se non dice niente."""
-    registry, _, pitch_unit = _engine()
+    _, _, pitch_unit, get_definition = _engine()
     if origin.kind == "studio":
         return None
     if origin.kind == "pitch":
         b = pitch_unit.make_pitch_unit(origin.name).value_bounds()
         return (b.min_val, b.max_val)
-    b = registry[origin.name]
+    # Coi bounds *dinamici* dell'engine, non con la riga statica del
+    # registry: per ``grain_duration`` il ``min_val`` scritto e' 1 ms, ma a
+    # runtime vale un campione (``_ONE_SAMPLE_FLOOR_PARAMS``), ed e' quello
+    # che gl-ls rispecchia.
+    b = get_definition(origin.name, output_sr=EI.OUTPUT_SR)
     lo, hi = ((b.min_val, b.max_val) if origin.slot == "value"
               else (b.min_range, b.max_range))
     # Intervallo degenere = segnaposto per un parametro non numerico, come
     # nella meta' sopra: li' gl-ls scrive (None, None).
     if lo == hi:
         return (None, None)
-    return (EI.STUDIO_FLOOR.get(path, lo), hi)
+    return (lo, hi)
 
 
 def _uguali(a, b):
@@ -238,10 +247,12 @@ def test_ogni_riga_dello_snapshot_dice_da_dove_viene():
     )
 
 
-def test_il_floor_di_studio_e_dichiarato_dove_lo_si_applica():
-    """``STUDIO_FLOOR`` non e' un'eccezione del test ma una riga del modulo."""
-    assert EI.STUDIO_FLOOR == {"grain.duration": EI.GRAIN_DURATION_MIN}
+def test_grain_duration_viene_tutto_dal_registry():
+    """Nessun floor di studio (gl-ls #47): minimo e massimo sono entrambi
+    dell'engine, e la provenienza lo dice senza eccezioni."""
+    assert not hasattr(EI, "STUDIO_FLOOR")
     assert EI.ORIGINS["grain.duration"].kind == "registry"
+    assert EI.GRAIN_DURATION_MIN == 1 / EI.OUTPUT_SR
 
 
 @needs_runtime
@@ -272,23 +283,24 @@ def test_la_banda_non_si_confonde_col_valore():
     Se un giorno l'engine facesse coincidere le due coppie, lo slot
     smetterebbe di discriminare e l'errore tornerebbe invisibile: meglio
     saperlo da un test che scoprirlo da uno studio che non renderizza."""
-    registry, _, _ = _engine()
+    registry, _, _, _ = _engine()
     for name in ("volume", "pan", "grain_duration", "pointer_deviation"):
         b = registry[name]
         assert (b.min_val, b.max_val) != (b.min_range, b.max_range), name
 
 
 @needs_runtime
-def test_il_floor_di_studio_non_e_piu_largo_di_quello_dell_engine():
-    """Il floor di studio stringe, non allarga: sotto il minimo dinamico
-    dell'engine sarebbe un valore che gl-ls accetta e nessuno renderizza."""
+def test_il_floor_e_quello_dinamico_dell_engine():
+    """Uguale, non solo "non piu' largo": piu' largo accetterebbe cio' che
+    nessuno renderizza, piu' stretto segnerebbe in rosso valori validi — il
+    falso positivo di gl-ls #47."""
     from pge.parameters.parameter_definitions import (  # type: ignore
         get_parameter_definition,
     )
 
     dinamico = get_parameter_definition(
         "grain_duration", output_sr=EI.OUTPUT_SR).min_val
-    assert EI.GRAIN_DURATION_MIN >= dinamico
+    assert EI.GRAIN_DURATION_MIN == dinamico
 
 
 @needs_runtime

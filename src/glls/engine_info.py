@@ -19,9 +19,9 @@ la sola grafia che l'engine legge davvero, ed e' quella che un ``path:`` di
 ``axes``/``spread.over`` deve avere. Dove le due grafie divergono, la seconda
 non e' un sinonimo ma un errore muto — vedi ``REGISTRY_SPELLINGS``.
 
-Due bounds qui dentro non sono dell'engine ma di *granulation-studies*, che li
-stringe (``VOLUME_MAX_DB``, ``MIN_GRAIN_SAMPLES``): il runtime che valida
-questi ``study.yml`` e' quello, quindi la superficie da rispecchiare e' la sua.
+Un bound qui dentro non e' dell'engine ma di *granulation-studies*, che lo
+alza (``VOLUME_MAX_DB``): il runtime che valida questi ``study.yml`` e' quello,
+quindi la superficie da rispecchiare e' la sua.
 """
 from __future__ import annotations
 
@@ -30,19 +30,16 @@ from typing import Dict, Optional, Tuple, Union
 
 OUTPUT_SR = 48000
 
-# Minimo di ``grain.duration`` **in campioni**. Non e' un dato dell'engine, che
-# scende a 1 campione (``pge.api.parameter_bounds(output_sr=...)`` porta
-# ``grain_duration.min_val`` a ``1/output_sr``): e' un vincolo di *studio*,
-# granulation-studies ``bounds.MIN_GRAIN_SAMPLES`` — sotto i 4 campioni il
-# grano non ha inviluppo udibile, e ``granstudies sweep`` rifiuta il valore al
-# parse invece di renderizzarlo. Vale sempre, anche coi valori scritti in
-# secondi: prima il floor dinamico si accendeva solo con una
-# ``grain.duration_unit`` dichiarata, e uno studio in secondi passava muto qui
-# per poi fallire di la'.
-MIN_GRAIN_SAMPLES = 4
-
-#: Il floor di ``grain.duration`` in secondi, alla frequenza di render.
-GRAIN_DURATION_MIN = MIN_GRAIN_SAMPLES / OUTPUT_SR
+#: Il floor di ``grain.duration`` in secondi: **un campione** alla frequenza di
+#: render, il minimo dinamico dell'engine (``get_parameter_definition(
+#: "grain_duration", output_sr=...)`` porta ``min_val`` a ``1/output_sr``; il
+#: ``0.001`` statico del registry non vale a runtime). Fino a gl-ls #47 qui
+#: c'era un floor di *studio* di 4 campioni (granulation-studies
+#: ``bounds.MIN_GRAIN_SAMPLES``), che granulation-studies ha tolto
+#: (mare-nostrum da95f26): ``bounds_for("grain.duration")`` restituisce ora il
+#: minimo dell'engine senza rialzo. Vale sempre, anche coi valori scritti in
+#: secondi — non solo con una ``grain.duration_unit`` dichiarata.
+GRAIN_DURATION_MIN = 1 / OUTPUT_SR
 
 # Tetto di ``volume``. Non e' un dato fisso dell'engine: e' una costante di
 # *studio*. granulation-studies (``granstudies/engine_bridge.py``, costante
@@ -87,8 +84,7 @@ PARAMS: Dict[str, ParamInfo] = {
         "Durata del singolo grano. I bounds sono in secondi: con una "
         "`duration_unit` dichiarata (`samples` = campioni a 48000 Hz, "
         "`milliseconds` = ms) i valori vivono in quell'unita' e si convertono "
-        "prima del confronto. Il minimo e' il floor di studio di "
-        "`MIN_GRAIN_SAMPLES` campioni, non il campione singolo dell'engine."),
+        "prima del confronto. Il minimo e' un campione, quello dell'engine."),
     "grain.duration_range": ParamInfo(0, 1, None, "±s",
         "Randomizzazione ± della durata per grano, nell'unita' di "
         "`grain.duration_unit`. La banda ha bounds suoi, molto piu' stretti "
@@ -250,14 +246,6 @@ ORIGINS: Dict[str, Origin] = {
         "Come ``onset``: campo di contesto, non parametro."),
 }
 
-#: Path il cui **minimo** e' sostituito da un floor di studio, con quale
-#: valore. L'unico e' ``grain.duration``: la provenienza resta il registry —
-#: il massimo e' quello dell'engine — ma il minimo no (vedi
-#: ``MIN_GRAIN_SAMPLES``), e senza dirlo qui la verifica lo leggerebbe come
-#: drift.
-STUDIO_FLOOR: Dict[str, float] = {"grain.duration": GRAIN_DURATION_MIN}
-
-
 # Path con default engine assente: baseline obbligatorio in un asse.
 NEEDS_BASELINE = frozenset(
     p for p, info in PARAMS.items() if info.default is None
@@ -294,19 +282,6 @@ def bounds_phrase(info: ParamInfo) -> str:
     lo = "-∞" if info.min is None else f"{info.min:g}"
     hi = "∞" if info.max is None else f"{info.max:g}"
     return f"bounds [{lo}, {hi}] {info.unit}"
-
-
-def grain_floor_note() -> str:
-    """Perche' ``grain.duration`` ha quel minimo, detto una volta sola.
-
-    Un valore sotto il floor e' *renderizzabile* — l'engine scende a un
-    campione — e viene rifiutato lo stesso: il messaggio deve dire di chi e'
-    il vincolo, altrimenti sembra un limite dell'engine e si va a cercarlo
-    dove non c'e'."""
-    return (f"Il minimo e' {MIN_GRAIN_SAMPLES} campioni a {OUTPUT_SR} Hz "
-            f"({GRAIN_DURATION_MIN:g} s): e' un vincolo di studio, non "
-            f"dell'engine — che scende a 1 campione — perche' sotto i "
-            f"{MIN_GRAIN_SAMPLES} campioni il grano non ha inviluppo udibile.")
 
 
 # ---------------------------------------------------------------------------
