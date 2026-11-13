@@ -38,8 +38,10 @@ Tre strati, tutti puri e testabili senza LSP:
   la domanda "regge quella di `engine_info`?" e' tornata da li'. La risposta e'
   no per conto suo, ma un import non e' il rimedio: dei tre disallineamenti
   trovati in quel giro, due erano *nomi* (`num_voices` per
-  `voices.num_voices`) e il terzo — il minimo di `grain.duration` — e' una
-  costante di **studio**, `MIN_GRAIN_SAMPLES = 4`, che nell'engine non esiste.
+  `voices.num_voices`) e il terzo — il minimo di `grain.duration` — era una
+  costante di **studio**, `MIN_GRAIN_SAMPLES = 4`, che nell'engine non esiste
+  (granulation-studies l'ha poi tolta: oggi il floor e' il campione
+  dell'engine, `1/output_sr`, gl-ls #47).
   `pge.api.parameter_bounds()` non avrebbe detto niente su nessuno dei due, e
   il termine di paragone giusto non e' l'engine ma granstudies, che di questi
   `study.yml` e' il runtime. Vale quindi la stessa forma del contratto sui
@@ -222,8 +224,8 @@ Tre strati, tutti puri e testabili senza LSP:
   che nessuna modifica al testo spiega. Da PGE v5.1.0 `pge.api.parameter_bounds()`
   li espone gia' risolti, ma dipenderne costerebbe la scelta standalone e non
   chiuderebbe il drift che conta: i bounds che questi `study.yml` devono
-  rispettare sono quelli di granstudies, che sull'engine ne stringe due
-  (`VOLUME_MAX_DB`, `MIN_GRAIN_SAMPLES`). Vedi la decisione sopra.
+  rispettare sono quelli di granstudies, che sull'engine ne cambia uno
+  (`VOLUME_MAX_DB`). Vedi la decisione sopra.
 - `pitch.range` non ha bounds nello snapshot: il suo `max_range` dipende
   dall'unita' attiva (36 in semitoni, 3600 in cents, 2.0 in `ratio`), quindi
   non e' una riga di `PARAMS` ma una funzione del blocco. La chiave e' nota a

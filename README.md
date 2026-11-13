@@ -20,8 +20,8 @@ Language server (LSP) per il **linguaggio di granulazione** degli
   camminata-X con Y che enumera);
 - bounds engine su `baseline`, `values` e sugli envelope di `base.*`
   (density [0.01, 4000], volume [-120, 24], ...), compreso il floor di
-  `grain.duration` a **4 campioni** — vincolo di studio, non dell'engine, e il
-  messaggio lo dice invece di lasciar cercare il limite dove non c'e';
+  `grain.duration` a **1 campione** (`1/output_sr`), quello dell'engine —
+  granulation-studies non ne impone piu' uno suo (gl-ls #47);
 - **grafie di registry** scambiate per chiavi YAML (`num_voices` invece di
   `voices.num_voices`, `pointer.deviation` invece di `pointer.offset_range`):
   l'unico errore di questa famiglia che a runtime resta muto — l'override

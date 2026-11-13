@@ -281,14 +281,9 @@ def _check_bounds_value(
     if (lo is not None and n < lo) or (hi is not None and n > hi):
         lo_s = "-∞" if lo is None else f"{lo:g}"
         hi_s = "∞" if hi is None else f"{hi:g}"
-        # sotto il floor di grain.duration il valore e' renderizzabile e viene
-        # rifiutato lo stesso: senza la nota il numero sembra un limite
-        # dell'engine, e lo si va a cercare dove non c'e'
-        why = ("" if engine_path != "grain.duration" or lo is None or n >= lo
-               else " " + EI.grain_floor_note())
         bag.add(path,
                 f"{label}: {n:g}{note} fuori bounds [{lo_s}, {hi_s}] "
-                f"per '{engine_path}'.{why}",
+                f"per '{engine_path}'.",
                 code="out-of-bounds", prefer_value=True)
 
 

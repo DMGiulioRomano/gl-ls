@@ -2,8 +2,8 @@
 
 Tre fatti, uno per sezione:
 
-1. il minimo di ``grain.duration`` e' **4 campioni**, non 1 — un floor di
-   *studio* (``granstudies.bounds.MIN_GRAIN_SAMPLES``), non dell'engine, e
+1. il minimo di ``grain.duration`` e' **1 campione** (``1/output_sr``), quello
+   dell'engine: il floor di studio di 4 campioni non c'e' piu' (gl-ls #47), e
    vale sempre, anche con i valori scritti in secondi;
 2. ``num_voices`` / ``scatter`` / ``pointer.deviation`` sono i nomi del
    *registry* engine, non le chiavi YAML: scritti come path finiscono in un
@@ -45,63 +45,77 @@ def _axis(body):
         "  density:\n    baseline: 20\n    values: [10, 30]\n", body)
 
 
-# --- 1. il floor di grain.duration: 4 campioni ------------------------------
+# --- 1. il floor di grain.duration: 1 campione, quello dell'engine ---------
+#
+# Fino a gl-ls #47 il minimo era 4 campioni, un floor di *studio*
+# (``granstudies.bounds.MIN_GRAIN_SAMPLES``). granulation-studies l'ha tolto
+# (mare-nostrum da95f26 / ec0a8ea): ``bounds_for("grain.duration")`` ora
+# restituisce il minimo dell'engine, ``1/output_sr``. Un floor piu' alto qui
+# segnerebbe in rosso valori fra 1 e 4 campioni che il runtime accetta.
 
 
-def test_il_floor_e_quattro_campioni():
-    assert EI.MIN_GRAIN_SAMPLES == 4
-    assert EI.PARAMS["grain.duration"].min == 4 / EI.OUTPUT_SR
+def test_il_floor_e_un_campione():
+    assert EI.PARAMS["grain.duration"].min == 1 / EI.OUTPUT_SR
+    assert EI.GRAIN_DURATION_MIN == 1 / EI.OUTPUT_SR
 
 
-def test_grain_duration_sotto_quattro_campioni_in_secondi_e_fuori_bounds():
-    # 0.00005 s = 2.4 campioni a 48 kHz: renderizzabile dall'engine (che
-    # scende a 1), rifiutato da granstudies al parse.
-    assert "out-of-bounds" in codes(_grain("    duration: 0.00005\n"))
+def test_nessun_floor_di_studio_residuo():
+    assert not hasattr(EI, "MIN_GRAIN_SAMPLES")
+    assert not hasattr(EI, "STUDIO_FLOOR")
+    assert "studio" not in EI.PARAMS["grain.duration"].doc
 
 
-def test_grain_duration_a_quattro_campioni_in_secondi_passa():
-    # 0.0001 s = 4.8 campioni: sopra il floor
-    assert "out-of-bounds" not in codes(_grain("    duration: 0.0001\n"))
+def test_fra_uno_e_quattro_campioni_in_secondi_passa():
+    # 0.00005 s = 2.4 campioni a 48 kHz: era il falso positivo di #47
+    assert "out-of-bounds" not in codes(_grain("    duration: 0.00005\n"))
+
+
+def test_sotto_un_campione_in_secondi_e_fuori_bounds():
+    # 0.00001 s = 0.48 campioni
+    assert "out-of-bounds" in codes(_grain("    duration: 0.00001\n"))
 
 
 def test_un_millisecondo_resta_legale():
-    # il vecchio fallback statico dell'engine (1 ms) sta ampiamente sopra
     assert "out-of-bounds" not in codes(_grain("    duration: 0.001\n"))
 
 
-def test_il_messaggio_dice_che_il_floor_e_un_vincolo_di_studio():
-    d = next(d for d in diags_of(_grain("    duration: 0.00005\n"))
+def test_il_messaggio_non_parla_piu_di_vincolo_di_studio():
+    d = next(d for d in diags_of(_grain("    duration: 0.00001\n"))
              if d.code == "out-of-bounds")
-    assert "4 campioni" in d.message
-    assert "studio" in d.message
+    assert "studio" not in d.message
+    assert "4 campioni" not in d.message
 
 
-def test_il_floor_vale_anche_in_campioni():
+def test_il_floor_in_campioni_e_uno():
+    for n in (1, 2, 3, 4):
+        assert "out-of-bounds" not in codes(
+            _grain(f"    duration: {n}\n    duration_unit: samples\n")), n
     assert "out-of-bounds" in codes(
-        _grain("    duration: 3\n    duration_unit: samples\n"))
+        _grain("    duration: 0.5\n    duration_unit: samples\n"))
+
+
+def test_il_floor_in_millisecondi():
+    # 0.05 ms = 2.4 campioni (passa); 0.01 ms = 0.48 campioni (no)
     assert "out-of-bounds" not in codes(
-        _grain("    duration: 4\n    duration_unit: samples\n"))
-
-
-def test_il_floor_vale_anche_in_millisecondi():
-    # 0.05 ms = 2.4 campioni; 0.1 ms = 4.8 campioni
-    assert "out-of-bounds" in codes(
         _grain("    duration: 0.05\n    duration_unit: milliseconds\n"))
-    assert "out-of-bounds" not in codes(
-        _grain("    duration: 0.1\n    duration_unit: milliseconds\n"))
+    assert "out-of-bounds" in codes(
+        _grain("    duration: 0.01\n    duration_unit: milliseconds\n"))
 
 
 def test_il_floor_vale_sui_valori_di_un_asse():
     text = _axis("  grain.duration:\n    baseline: 0.001\n"
-                 "    values: [0.00002, 0.001]\n")
+                 "    values: [0.00001, 0.001]\n")
     assert "out-of-bounds" in codes(text)
+    text = _axis("  grain.duration:\n    baseline: 0.001\n"
+                 "    values: [0.00005, 0.001]\n")
+    assert "out-of-bounds" not in codes(text)
 
 
-def test_asse_in_campioni_dal_quarto_pulito():
-    # la scala '1-50smp' parte da 4 proprio per questo floor
-    text = _grain("    duration: 4\n    duration_unit: samples\n").replace(
+def test_asse_in_campioni_dal_primo_pulito():
+    # la scala in campioni puo' partire da 1, il campione dell'engine
+    text = _grain("    duration: 1\n    duration_unit: samples\n").replace(
         "  density:\n    baseline: 20\n    values: [10, 30]\n",
-        "  grain.duration:\n    baseline: 4\n    values: [4, 50]\n")
+        "  grain.duration:\n    baseline: 1\n    values: [1, 50]\n")
     assert "out-of-bounds" not in codes(text)
 
 
