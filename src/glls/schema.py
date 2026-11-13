@@ -428,6 +428,19 @@ _DRIFT_KEYS = [
 # ---------------------------------------------------------------------------
 # Superficie engine dentro `base:` (e `streams.*.base:`).
 
+MAPS_DOC = (
+    "**Mappe iterate dello stream** (PGE #308, #310, #313): `nome -> mappa`, "
+    "con `type` fra " + ", ".join(EI.MAP_TYPE_VALUES) + ". Un parametro la "
+    "legge con un'**espressione del motore** fra parentesi, valutata a ogni "
+    "grano: `grain.duration: (0.02 + 0.08*m1)`. Le espressioni valgono sul "
+    "valore base di volume, pan, grain.duration, grain.iot, "
+    "grain.read_direction, pointer.position, pitch (ogni unita'), density, "
+    "fill_factor, distribution; leggono le mappe, `<nome>.y` per quelle a due "
+    "variabili, e `t` (secondi dall'inizio dello stream). Non sono i "
+    "nodi-expr dello studio: quelli si risolvono quando lo studio si espande, "
+    "queste attraversano lo studio intatte e le valuta il motore."
+)
+
 _ENGINE_STREAM_KEYS = [
     _k("onset", "Tempo di inizio assoluto dello stream (s). **Opzionale** "
                 "(PGE #220): assente vale 0, l'origine della timeline. Un "
@@ -455,7 +468,8 @@ _ENGINE_STREAM_KEYS = [
                         "(default) | `passthrough`.", values=EI.CLIP_STRATEGIES),
     _k("clip_margin", "Tolleranza in secondi per la coda dei grain (default 0)."),
     _k("density", "Grani al secondo (scalare o envelope). Bounds [0.01, 4000]. "
-                  "Mutuamente esclusivo con `fill_factor` (che ha priorita')."),
+                  "Mutuamente esclusivo con `fill_factor` (che ha priorita'); "
+                  "con `grain.iot` e' un errore dell'engine."),
     _k("fill_factor", "density = fill_factor / grain.duration. Bounds [0.001, 50]."),
     _k("distribution", "Modello Truax: 0 = sincrono, 1 = asincrono; blend lineare. "
                        "Scalare o envelope. Non e' `distribution_mode`, che e' "
@@ -469,10 +483,11 @@ _ENGINE_STREAM_KEYS = [
     _k("pan", "Gradi: 0 centro, ±180 estremi. Bounds [-3600, 3600]."),
     _k("pan_range", "±gradi randomizzazione per grano."),
     _k("grain", "Blocco grano: duration, duration_range, duration_unit, "
-                "envelope (finestra), reverse | read_direction.",
+                "envelope (finestra), reverse | read_direction, iot.",
        snippet="grain:\n  duration: ${1:0.05}\n  envelope: ${2:hanning}"),
     _k("pointer", "Posizione di lettura nel sample: start, speed_ratio, "
-                  "offset_range, loop_start/loop_end/loop_dur, loop_unit."),
+                  "offset_range, loop_start/loop_end/loop_dur, loop_unit; "
+                  "oppure position (al posto di start e speed_ratio)."),
     _k("pitch", "Trasposizione unit-driven: UNA sola chiave-unita' tra "
                 "semitones, quarter_tone, eighth_tone, cents, edo(+value), ratio."),
     _k("deviation_probability", DEVIATION_PROBABILITY_DOC),
@@ -481,6 +496,8 @@ _ENGINE_STREAM_KEYS = [
                               "deviation_probability."),
     _k("voices", "Multi-voice: num_voices, scatter, pitch, onset_offset, "
                  "pointer, pan (strategy per dimensione)."),
+    _k("maps", MAPS_DOC,
+       snippet="maps:\n  ${1:m1}: {type: ${2:logistic}, r: ${3:3.5}}"),
     _k("seed", "**Ignorato dall'engine.** Il seed e' top-level, non per-stream: "
                "`StreamConfig.from_yaml` sovrascrive sempre questa chiave col "
                "seed del documento. Per la riproducibilita' del run usa `seed:` "
@@ -525,6 +542,14 @@ _GRAIN_KEYS = [
                   "Esclusiva con `read_direction`: insieme sono un errore, non "
                   "una priorita'."),
     _k("read_direction", READ_DIRECTION_DOC, values=["-1", "1"]),
+    _k("iot", "**Attesa fino al grano successivo** (PGE #311), nell'unita' di "
+              "`duration_unit`: il terzo modo della densita', accanto a "
+              "`density` e `fill_factor`, scelto per presenza della chiave. "
+              "Numero, envelope o espressione del motore (`(0.02 + "
+              "0.18*m1)`). Da un campione a 100 s. Con lei la densita' non si "
+              "decide, **emerge** dagli onset, e niente distribuzione di "
+              "Truax sopra: insieme a `density`, `fill_factor` o "
+              "`distribution` e' un errore dell'engine, non una priorita'."),
 ]
 
 _POINTER_KEYS = [
@@ -542,6 +567,14 @@ _POINTER_KEYS = [
     _k("loop_dur", "Durata loop, nell'unita' di `loop_unit`. Unica forma per "
                    "un loop a cavallo della fine del file."),
     _k("loop_unit", LOOP_UNIT_DOC, values=EI.LOOP_UNITS),
+    _k("position", "**Posizione di lettura scritta** (PGE #312), da 0 a 1 "
+                   "della finestra attiva: la finestra di loop se c'e', "
+                   "altrimenti il file. Numero, envelope o espressione del "
+                   "motore (`(m1)`). Fuori da 0–1 **rientra a capo** (`1.25` "
+                   "e' `0.25`), non e' un errore; `loop_unit` non la riscala. "
+                   "Sta al posto di `speed_ratio` e `start`: scritte insieme "
+                   "sono un errore dell'engine. Il verso `auto` del grano vale "
+                   "«avanti»: per leggere indietro `grain.read_direction`."),
 ]
 
 _PITCH_KEYS = [
@@ -615,6 +648,35 @@ _DEVIATION_PROBABILITY_KEYS = [
                 "probabilita' per-grano di **ribaltare** il verso dichiarato."
                 if name in ("reverse", "read_direction") else ""))
     for name in EI.DEVIATION_PROBABILITY_KEYS
+]
+
+_MAP_KEYS = [
+    _k("type", "Tipo della mappa: " + ", ".join(EI.MAP_TYPE_VALUES)
+               + ". `custom` scrive l'equazione in `x:` (e `y:`).",
+       values=list(EI.MAP_TYPE_VALUES)),
+    _k("r", "Parametro della mappa: numero o envelope (sui tempi dello stream, "
+            "segue `time_mode`). Obbligatorio, tranne con una `custom` la cui "
+            "equazione non lo legge."),
+    _k("clock", "Quando la mappa avanza: `grain` (default, un passo per "
+                "grano) | passi al secondo, un numero o un envelope positivo e "
+                f"finito, al piu' {EI.OUTPUT_SR} (un passo per campione). "
+                "Esclusivo con `iterate`."),
+    _k("iterate", f"Intero da 1 a {EI.MAP_ITERATE_MAX}: a ogni lettura la mappa "
+                  "riparte da `x0` e fa tanti passi. Al posto di `clock`, e "
+                  "senza `transient`."),
+    _k("x0", "Stato iniziale (default del tipo; 0.1 per `custom`)."),
+    _k("transient", f"Passi scartati prima del primo grano: intero da 0 a "
+                    f"{EI.MAP_TRANSIENT_MAX} (default "
+                    f"{EI.MAP_TRANSIENT_DEFAULT}). Non con `iterate`."),
+    _k("y0", "Stato iniziale della seconda variabile: solo per una mappa che "
+             "ne ha due (`henon`, una `custom` con `y:`)."),
+    _k("x", "Equazione di una mappa `custom`: testo nel linguaggio delle "
+            "espressioni del motore, con le variabili `x`, `y`, `r`, senza "
+            "parentesi esterne (`sin(r*x)*cos(x)`). Solo con `type: custom`.",
+       kind="string"),
+    _k("y", "Equazione della seconda variabile di una `custom` (`0.3*x`): la "
+            "mappa diventa a due variabili, e si legge anche come "
+            "`<nome>.y`. Solo con `type: custom`.", kind="string"),
 ]
 
 _GRAIN_ENVELOPE_KEYS = [
@@ -857,6 +919,8 @@ CONTEXTS: Dict[str, List[Key]] = {
     "voices_pointer": _VOICES_POINTER_KEYS,
     "voices_pan": _VOICES_PAN_KEYS,
     "deviation_probability": _DEVIATION_PROBABILITY_KEYS,
+    "maps": [],                      # nomi di mappa liberi
+    "map": _MAP_KEYS,
     "engine_env": _ENGINE_ENV_KEYS,
     "axes": _AXES_RESERVED,          # + nomi d'asse liberi
     "axis": _AXIS_KEYS,
@@ -885,7 +949,7 @@ CONTEXTS: Dict[str, List[Key]] = {
 CLOSED_CONTEXTS = frozenset({
     "root", "engine_stream", "grain", "grain_envelope", "pointer", "pitch",
     "voices", "voices_pitch", "voices_onset", "voices_pointer", "voices_pan",
-    "deviation_probability",
+    "deviation_probability", "map",
     "axis", "env", "engine_env", "ramp", "drift", "sweep", "walk",
     "stream_override", "spread", "spread_strategy", "gain_compensation",
 })
@@ -923,6 +987,10 @@ def _engine_context(rest: KeyPath) -> str:
         "deviation_probability": "deviation_probability",
         "dephase": "deviation_probability",
     }
+    if head == "maps":
+        # i figli di ``maps:`` sono nomi liberi; dentro una mappa il
+        # vocabolario e' chiuso; sotto, l'envelope di ``r``/``clock``
+        return {1: "maps", 2: "map"}.get(len(rest), "engine_env")
     if head == "grain" and len(rest) >= 2 and rest[1] == "envelope":
         return "grain_envelope" if len(rest) == 2 else "value"
     if head == "voices" and len(rest) >= 2:

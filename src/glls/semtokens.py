@@ -170,7 +170,7 @@ def tokens(doc: Document, m: StudyModel) -> List[int]:
                 path[-2] if len(path) >= 2 and isinstance(path[-2], str) else None
             )
             slot = _compact_slot(doc, path) or _bp_group_slot(doc, path)
-            if parent_key == "expr":
+            if parent_key == "expr" or _engine_expression(doc, path):
                 raw.extend(_expr_tokens(lines, vs.start_line, vs.start_col,
                                         vs.end_col))
             elif slot is not None:
@@ -195,6 +195,27 @@ def tokens(doc: Document, m: StudyModel) -> List[int]:
         data.extend([d_line, d_col, length, tok, 0])
         prev_line, prev_col = line, col
     return data
+
+
+def _engine_expression(doc: Document, path) -> bool:
+    """Un'espressione del motore (PGE #307): stringa fra parentesi in un campo
+    engine in cui vale, o l'equazione ``x``/``y`` di una mappa ``custom``.
+    Stessi token di un nodo-expr, ma riconosciuta dal posto, non dalla
+    chiave ``expr``."""
+    from . import engine_expr as EX
+    value = doc.get(path)
+    if not isinstance(value, str) or not all(isinstance(p, str) for p in path):
+        return False
+    if len(path) >= 2 and path[0] == "base":
+        rest = path[1:]
+    elif len(path) >= 4 and path[0] == "streams" and path[2] == "base":
+        rest = path[3:]
+    else:
+        return False
+    if len(rest) == 3 and rest[0] == "maps" and rest[2] in ("x", "y"):
+        return True
+    return (".".join(rest) in EX.EXPRESSION_FIELDS
+            and EX.outer_parenthesized(value))
 
 
 def _expr_tokens(lines: List[str], line: int, start: int, end: int):

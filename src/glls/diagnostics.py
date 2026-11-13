@@ -17,7 +17,7 @@ from lsprotocol import types
 
 from . import engine_info as EI
 from .convert import as_num as _num
-from . import codes, exprlang, schema
+from . import codes, engine_expr as EX, exprlang, schema
 from .model import (
     AXES_RESERVED,
     GEN_MARKERS,
@@ -122,6 +122,7 @@ def collect(doc: Document, m: StudyModel) -> List[types.Diagnostic]:
     _check_streams(bag, doc, m)
     _check_global_spread(bag, doc, m)
     _check_engine_block(bag, doc, m, ("base",))
+    _check_axes_exclusive(bag, doc, m)
     _check_loop_unit(bag, doc)
     _check_let_blocks(bag, doc, m)
     _check_unknown_keys(bag, doc, m)
@@ -225,7 +226,9 @@ def _check_stack_duration(bag: Bag, doc: Document, m: StudyModel) -> None:
 # Parametri che l'engine riscala verso i secondi quando ``grain.duration_unit``
 # e' dichiarata (``stream._pre_normalize_grain_params``): il fattore dipende
 # dall'unita' — 1/output_sr per ``samples``, 1e-3 per ``milliseconds``.
-_UNIT_SCALED = frozenset({"grain.duration", "grain.duration_range"})
+# ``grain.iot`` segue la stessa unita' (PGE #311), anche se nell'engine la
+# scala un passo suo (``Stream._pre_normalize_grain_iot``).
+_UNIT_SCALED = frozenset({"grain.duration", "grain.duration_range", "grain.iot"})
 
 
 def _grain_unit(doc: Document, bpath: KeyPath) -> Optional[str]:
@@ -258,6 +261,17 @@ def _check_bounds_value(
     b = EI.bounds_for(engine_path)
     n = _num(v)
     if b is None or n is None:
+        return
+    if engine_path in EI.WRAPPING_PATHS:
+        # ``pointer.position`` rientra a capo (``WRAPPING_PARAMETERS``): un
+        # valore finito fuori da [0, 1] e' valido. Un non-finito no, ed e'
+        # l'errore di bounds dell'engine al caricamento.
+        if not math.isfinite(n):
+            bag.add(path,
+                    f"{label}: {n:g} non e' un numero finito: '{engine_path}' "
+                    "rientra a capo della finestra, ma un .nan o un .inf "
+                    "e' un errore di bounds dell'engine.",
+                    code="out-of-bounds", prefer_value=True)
         return
     note = ""
     if grain_unit is not None and engine_path in _UNIT_SCALED:
@@ -1742,6 +1756,11 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
                 "'density' e 'fill_factor' sono mutuamente esclusivi "
                 "(fill_factor ha priorita').",
                 types.DiagnosticSeverity.Warning, code="density-fill")
+    merged = _merged_engine_block(doc, bpath)
+    _check_iot_exclusive(bag, bpath, base, merged)
+    _check_position_exclusive(bag, bpath, base, merged)
+    _check_maps(bag, bpath, base, merged)
+    _check_engine_expressions(bag, bpath, base, merged)
     tm = base.get("time_mode")
     if tm is not None and tm not in EI.TIME_MODES:
         bag.add(bpath + ("time_mode",),
@@ -1796,7 +1815,7 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
     grain = base.get("grain")
     if isinstance(grain, dict):
         _check_window_value(bag, bpath + ("grain", "envelope"), grain.get("envelope"))
-        _check_read_direction(bag, bpath, grain)
+        _check_read_direction(bag, bpath, grain, _map_variables(merged))
         if "reverse" in grain and grain.get("reverse") is not None:
             bag.add(bpath + ("grain", "reverse"),
                     "grain.reverse: chiave presente vuota = reverse forzato; "
@@ -1861,6 +1880,430 @@ def _check_engine_block(bag: Bag, doc: Document, m: StudyModel,
             continue
         _check_param_bounds(bag, bpath + parts, dotted, v, m,
                             grain_unit=grain_unit)
+
+
+# ---------------------------------------------------------------------------
+# Mappe caotiche (PGE #307): ``maps:``, le espressioni del motore, ``grain.iot``
+# e ``pointer.position``.
+
+
+def _merged_engine_block(doc: Document, bpath: KeyPath) -> Dict[str, Any]:
+    """Il blocco engine come lo vede l'engine: quello di una entry di
+    ``streams:`` e' il deep-merge sul ``base:`` del documento. Il root e' se
+    stesso."""
+    local = doc.get(bpath)
+    local = local if isinstance(local, dict) else {}
+    if bpath == ("base",):
+        return local
+    root = doc.get(("base",))
+    return _deep_merge(root, local) if isinstance(root, dict) else local
+
+
+def _declared(block: Any, *keys: str) -> bool:
+    """La chiave e' **presente** nel blocco (anche vuota): l'esclusivita' dei
+    modi si decide per presenza, non per valore."""
+    node = block
+    for k in keys[:-1]:
+        if not isinstance(node, dict):
+            return False
+        node = node.get(k)
+    return isinstance(node, dict) and keys[-1] in node
+
+
+def _check_iot_exclusive(bag: Bag, bpath: KeyPath, local: Dict[str, Any],
+                         merged: Dict[str, Any]) -> None:
+    """``grain.iot`` con ``density``/``fill_factor``/``distribution`` e' un
+    errore dell'engine (``IOT_EXCLUSIVE_KEYS``), non una priorita'. Vale sullo
+    stream merged: ``density`` in ``base:`` e ``grain.iot`` in una entry di
+    ``streams:`` sono lo stesso stream. Il blocco che lo dice e' quello che
+    porta almeno una delle chiavi in conflitto: senza, l'ha gia' detto il
+    ``base:`` del documento."""
+    if not _declared(merged, "grain", "iot"):
+        return
+    conflitti = [k for k in EI.IOT_EXCLUSIVE_KEYS if k in merged]
+    if not conflitti:
+        return
+    local_iot = _declared(local, "grain", "iot")
+    local_conf = [k for k in conflitti if k in local]
+    if not local_iot and not local_conf:
+        return
+    where = bpath + (("grain", "iot") if local_iot else (local_conf[0],))
+    bag.add(where,
+            "grain.iot e' l'attesa fino al grano successivo: con lei la "
+            "densita' non si decide, emerge dagli onset, e non puo' stare "
+            f"insieme a {', '.join(conflitti)}. Tieni grain.iot, oppure "
+            "density / fill_factor (con distribution), non entrambe.",
+            code="iot-exclusive")
+
+
+def _check_position_exclusive(bag: Bag, bpath: KeyPath, local: Dict[str, Any],
+                              merged: Dict[str, Any]) -> None:
+    """``pointer.position`` con ``speed_ratio``/``start`` e' un errore
+    dell'engine (``POSITION_EXCLUSIVE_KEYS``): due leggi di moto diverse."""
+    if not _declared(merged, "pointer", "position"):
+        return
+    pointer = merged.get("pointer")
+    conflitti = [k for k in EI.POSITION_EXCLUSIVE_KEYS if k in pointer]
+    if not conflitti:
+        return
+    lp = local.get("pointer") if isinstance(local.get("pointer"), dict) else {}
+    local_conf = [k for k in conflitti if k in lp]
+    if "position" not in lp and not local_conf:
+        return
+    where = bpath + ("pointer", "position" if "position" in lp else local_conf[0])
+    bag.add(where,
+            "pointer.position e' la posizione di lettura nella finestra "
+            "attiva, da 0 a 1: prende il posto della legge di moto, e non "
+            f"puo' stare insieme a {', '.join('pointer.' + k for k in conflitti)}. "
+            "Tieni position, oppure start / speed_ratio, non entrambe.",
+            code="position-exclusive")
+
+
+def _check_axes_exclusive(bag: Bag, doc: Document, m: StudyModel) -> None:
+    """Un asse che scrive l'altro modo produce stream che l'engine rifiuta:
+    un asse su ``density`` in uno studio il cui ``base:`` ha ``grain.iot``,
+    o su ``pointer.start`` accanto a ``pointer.position``."""
+    base = doc.get(("base",))
+    if not isinstance(base, dict):
+        return
+    pointer = base.get("pointer") if isinstance(base.get("pointer"), dict) else {}
+    for name, ax in m.axes.items():
+        p = getattr(ax, "path", None)
+        if not isinstance(p, str):
+            continue
+        cfg = doc.get(("axes", name))
+        kp = ("axes", name) + (("path",) if isinstance(cfg, dict)
+                                and "path" in cfg else ())
+        if p in EI.IOT_EXCLUSIVE_KEYS and _declared(base, "grain", "iot"):
+            bag.add(kp, f"Asse '{name}' su '{p}': il base: dichiara grain.iot, "
+                    f"e grain.iot con {p} e' un errore dell'engine. Ogni "
+                    "stream dell'asse verrebbe rifiutato.",
+                    code="iot-exclusive", prefer_value="path" in kp)
+        elif p == "grain.iot":
+            conf = [k for k in EI.IOT_EXCLUSIVE_KEYS if k in base]
+            if conf:
+                bag.add(kp, f"Asse '{name}' su grain.iot: il base: dichiara "
+                        f"{', '.join(conf)}, che con grain.iot e' un errore "
+                        "dell'engine.", code="iot-exclusive",
+                        prefer_value="path" in kp)
+        elif (p in tuple(f"pointer.{k}" for k in EI.POSITION_EXCLUSIVE_KEYS)
+              and "position" in pointer):
+            bag.add(kp, f"Asse '{name}' su '{p}': il base: dichiara "
+                    f"pointer.position, e {p} accanto a position e' un errore "
+                    "dell'engine.", code="position-exclusive",
+                    prefer_value="path" in kp)
+        elif p == "pointer.position":
+            conf = [k for k in EI.POSITION_EXCLUSIVE_KEYS if k in pointer]
+            if conf:
+                bag.add(kp, f"Asse '{name}' su pointer.position: il base: "
+                        f"dichiara {', '.join('pointer.' + k for k in conf)}, "
+                        "che con position e' un errore dell'engine.",
+                        code="position-exclusive", prefer_value="path" in kp)
+
+
+def _map_variables(merged: Dict[str, Any]) -> Tuple[str, ...]:
+    """I nomi che un'espressione dello stream puo' leggere
+    (``MapSet.variables``): le mappe, ``<nome>.y`` per quelle a due
+    variabili, e ``t``."""
+    maps = merged.get("maps")
+    names: List[str] = []
+    if isinstance(maps, dict):
+        for name, spec in maps.items():
+            if not isinstance(name, str):
+                continue
+            names.append(name)
+            if _map_two_variables(spec):
+                names.append(f"{name}.y")
+    names.append(EX.TIME_NAME)
+    return tuple(names)
+
+
+def _map_two_variables(spec: Any) -> bool:
+    if not isinstance(spec, dict):
+        return False
+    t = spec.get("type")
+    if t == EI.MAP_TYPE_CUSTOM:
+        return spec.get("y") is not None
+    k = EI.MAP_KINDS.get(t) if isinstance(t, str) else None
+    return k is not None and k.variables == 2
+
+
+def _is_finite_num(v: Any) -> bool:
+    n = _num(v)
+    return n is not None and math.isfinite(n)
+
+
+def _is_int(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _env_ys(v: Any) -> Optional[List[float]]:
+    """Le Y numeriche di un envelope semplice (lista di punti o
+    ``{points}``); None se non e' una forma da leggere qui."""
+    pts = v.get("points") if isinstance(v, dict) else v
+    if not isinstance(pts, list):
+        return None
+    ys = []
+    for p in pts:
+        if isinstance(p, (list, tuple)) and len(p) in (2, 3):
+            y = _num(p[1])
+            if y is not None:
+                ys.append(y)
+    return ys
+
+
+def _check_maps(bag: Bag, bpath: KeyPath, local: Dict[str, Any],
+                merged: Dict[str, Any]) -> None:
+    """Le regole che l'engine applica a ``maps:`` al caricamento
+    (``MapConfigError``), sul blocco merged; dice ogni mappa dove e' scritta."""
+    if "maps" not in local:
+        return
+    raw = local.get("maps")
+    mpath = bpath + ("maps",)
+    if not isinstance(raw, dict):
+        bag.add(mpath, "maps e' un dizionario: nome della mappa -> mappa "
+                "(es. maps: {m1: {type: logistic, r: 3.5}}).",
+                code="map-config", prefer_value=True)
+        return
+    merged_maps = merged.get("maps") if isinstance(merged.get("maps"), dict) else raw
+    if not merged_maps:
+        bag.add(mpath, "maps: nessuna mappa dichiarata; se non servono, togli "
+                "la chiave.", code="map-config")
+        return
+    import re as _re
+    reserved = EI.reserved_map_names()
+    for name in raw:
+        kp = mpath + (name,)
+        if not isinstance(name, str) or not _re.match(EI.MAP_NAME_PATTERN, name):
+            bag.add(kp, f"maps.{name}: il nome di una mappa e' fatto di lettere, "
+                    "cifre e '_', e non comincia con una cifra.",
+                    code="map-name")
+            continue
+        if name in reserved:
+            bag.add(kp, f"maps.{name}: nome riservato — in un'espressione vuol "
+                    "dire gia' un'altra cosa (riservati: "
+                    f"{', '.join(sorted(reserved))}).", code="map-name")
+            continue
+        _check_map(bag, kp, name, merged_maps.get(name))
+
+
+def _check_map(bag: Bag, kp: KeyPath, name: str, spec: Any) -> None:
+    campo = f"maps.{name}"
+    if not isinstance(spec, dict):
+        bag.add(kp, f"{campo}: una mappa e' un dizionario (type, r, ...).",
+                code="map-config", prefer_value=True)
+        return
+    tipo = spec.get("type")
+    if tipo is None:
+        bag.add(kp, f"{campo}: manca il tipo della mappa (tipi: "
+                f"{', '.join(EI.MAP_TYPE_VALUES)}).", code="map-config")
+        return
+    two = False
+    reads_r = True
+    if tipo == EI.MAP_TYPE_CUSTOM:
+        reads_r, two = _check_map_custom(bag, kp, campo, spec)
+    elif not isinstance(tipo, str) or tipo not in EI.MAP_KINDS:
+        sug = _suggest(str(tipo), EI.MAP_TYPE_VALUES) if isinstance(tipo, str) else None
+        extra = f" Forse '{sug}'?" if sug else ""
+        bag.add(kp + ("type",), f"{campo}.type: tipo sconosciuto '{tipo}' "
+                f"(tipi: {', '.join(EI.MAP_TYPE_VALUES)}).{extra}",
+                code="bad-enum", prefer_value=True,
+                data={"fix": {"kind": "rename-value", "new": sug}} if sug else None)
+        return
+    else:
+        two = EI.MAP_KINDS[tipo].variables == 2
+        for key in ("x", "y"):
+            if key in spec:
+                bag.add(kp + (key,), f"{campo}.{key}: si scrive solo con type: "
+                        f"custom — {tipo} ha gia' la sua equazione, e non si "
+                        "capirebbe quale delle due vale.", code="map-config")
+    r = spec.get("r")
+    if r is None:
+        if reads_r:
+            kind = EI.MAP_KINDS.get(tipo)
+            hint = (f" Per {tipo}: da {kind.r_range[0]:g} a {kind.r_range[1]:g}."
+                    if kind else " L'equazione lo legge: un numero o un envelope.")
+            bag.add(kp, f"{campo}: manca r, il parametro della mappa.{hint}",
+                    code="map-config")
+    elif isinstance(r, (list, dict)):
+        ys = _env_ys(r)
+        if ys is not None and any(not math.isfinite(y) for y in ys):
+            bag.add(kp + ("r",), f"{campo}.r: atteso un envelope di numeri finiti.",
+                    code="map-config", prefer_value=True)
+    elif not _is_finite_num(r):
+        bag.add(kp + ("r",), f"{campo}.r: atteso un numero finito o un envelope.",
+                code="map-config", prefer_value=True)
+    for key in ("x0", "y0"):
+        if key in spec and not _is_finite_num(spec.get(key)):
+            bag.add(kp + (key,), f"{campo}.{key}: atteso un numero finito.",
+                    code="map-config", prefer_value=True)
+    if "y0" in spec and not two:
+        bag.add(kp + ("y0",), f"{campo}.y0: la mappa ha una variabile sola, y0 "
+                "non entra nel passo — lo stato iniziale e' x0.",
+                code="map-config")
+    if "iterate" in spec:
+        if "clock" in spec:
+            bag.add(kp + ("iterate",), f"{campo}: clock e iterate insieme — una "
+                    "mappa o avanza con un clock, o si rilegge da x0 a ogni "
+                    "lettura (iterate). Tieni una delle due chiavi.",
+                    code="map-config")
+        n = spec.get("iterate")
+        if not _is_int(n) or not 1 <= n <= EI.MAP_ITERATE_MAX:
+            bag.add(kp + ("iterate",), f"{campo}.iterate: atteso un intero da 1 a "
+                    f"{EI.MAP_ITERATE_MAX} (i passi fatti da x0 a ogni lettura).",
+                    code="map-config", prefer_value=True)
+        if "transient" in spec:
+            bag.add(kp + ("transient",), f"{campo}.transient: con iterate non "
+                    "c'e' un transitorio, a ogni lettura si riparte da x0.",
+                    code="map-config")
+        return
+    _check_map_clock(bag, kp, campo, spec)
+    if "transient" in spec:
+        tr = spec.get("transient")
+        if not _is_int(tr) or not 0 <= tr <= EI.MAP_TRANSIENT_MAX:
+            bag.add(kp + ("transient",), f"{campo}.transient: atteso un intero da "
+                    f"0 a {EI.MAP_TRANSIENT_MAX} (i passi scartati prima del "
+                    "primo grano).", code="map-config", prefer_value=True)
+
+
+def _check_map_clock(bag: Bag, kp: KeyPath, campo: str, spec: Dict[str, Any]) -> None:
+    if "clock" not in spec:
+        return
+    c = spec.get("clock")
+    sr = EI.OUTPUT_SR
+    why = (f"`{EI.MAP_CLOCK_GRAIN}` (un passo per grano), oppure i passi al "
+           f"secondo: un numero positivo o un envelope, al piu' {sr} (uno per "
+           "campione)")
+    if c == EI.MAP_CLOCK_GRAIN:
+        return
+    if isinstance(c, (list, dict)):
+        ys = _env_ys(c) or []
+        if any(not (math.isfinite(y) and 0 < y <= sr) for y in ys):
+            bag.add(kp + ("clock",), f"{campo}.clock: il clock dev'essere "
+                    f"positivo, finito e al piu' {sr} in ogni punto "
+                    f"dell'envelope ({why}).", code="map-config")
+        return
+    n = _num(c)
+    if n is None or not (math.isfinite(n) and 0 < n <= sr):
+        bag.add(kp + ("clock",), f"{campo}.clock: clock non valido — {why}.",
+                code="map-config", prefer_value=True)
+
+
+def _check_map_custom(bag: Bag, kp: KeyPath, campo: str,
+                      spec: Dict[str, Any]) -> Tuple[bool, bool]:
+    """``(legge_r, due_variabili)`` di una ``type: custom``, segnalando cio'
+    che l'engine rifiuta delle sue equazioni."""
+    letti: set = set()
+    if spec.get("x") is None:
+        bag.add(kp, f"{campo}: manca x, l'equazione della mappa (con type: "
+                "custom il passo si scrive: x: sin(r*x)*cos(x); variabili x, "
+                "y, r).", code="map-config")
+        return False, False
+    fx = _map_equation(bag, kp + ("x",), f"{campo}.x", spec.get("x"))
+    if fx is not None:
+        letti |= set(fx)
+    two = spec.get("y") is not None
+    if "y" in spec and not two:
+        bag.add(kp + ("y",), f"{campo}.y: y e' scritta ma vuota — scrivi "
+                "l'equazione della seconda variabile, o togli la chiave.",
+                code="map-config")
+    if two:
+        fy = _map_equation(bag, kp + ("y",), f"{campo}.y", spec.get("y"))
+        if fy is not None:
+            letti |= set(fy)
+    elif fx is not None and "y" in fx:
+        bag.add(kp + ("x",), f"{campo}.x: l'equazione legge y, ma la mappa non "
+                "ha una seconda variabile — aggiungi y: (es. y: 0.3*x), o togli "
+                "y da x:.", code="map-config", prefer_value=True)
+    return "r" in letti, two
+
+
+def _map_equation(bag: Bag, kp: KeyPath, campo: str, v: Any) -> Optional[Tuple[str, ...]]:
+    if _num(v) is not None:
+        return ()
+    if not isinstance(v, str):
+        bag.add(kp, f"{campo}: un'equazione e' un testo, nel linguaggio delle "
+                "espressioni, con le variabili x, y, r (es. sin(r*x)*cos(x)).",
+                code="map-config", prefer_value=True)
+        return None
+    c = EX.compile_expression(v, EX.MAP_EQUATION_VARIABLES)
+    if not c.ok:
+        hint = f" {c.problem.hint}." if c.problem.hint else ""
+        bag.add(kp, f"{campo}: equazione non valida, {c.problem.reason}.{hint}",
+                code="engine-expr", prefer_value=True)
+        return None
+    return c.names
+
+
+def _engine_strings(node: Any, prefix: Tuple[str, ...] = ()):
+    """``(path dotted, key-path, testo)`` delle stringhe di un blocco engine,
+    sui valori dei campi (non dentro le liste: un breakpoint non e' un
+    campo). ``maps`` e' fuori: le sue equazioni le guarda ``_check_maps``."""
+    if not isinstance(node, dict):
+        return
+    for k, v in node.items():
+        if not isinstance(k, str):
+            continue
+        if not prefix and k == "maps":
+            continue
+        kp = prefix + (k,)
+        if isinstance(v, str):
+            yield ".".join(kp), kp, v
+        elif isinstance(v, dict) and not exprlang.is_expr_node(v):
+            yield from _engine_strings(v, kp)
+
+
+def _check_engine_expressions(bag: Bag, bpath: KeyPath, local: Dict[str, Any],
+                              merged: Dict[str, Any]) -> None:
+    """Le espressioni del motore scritte nel blocco: valide dove valgono
+    (``EXPRESSION_FIELDS``), sui nomi che lo stream mette a disposizione; un
+    errore altrove, dove il motore le rifiuta."""
+    variables = _map_variables(merged)
+    declared = frozenset(n for n in variables if "." not in n)
+    for dotted, kp, text in _engine_strings(local):
+        where = bpath + kp
+        if dotted in EX.EXPRESSION_FIELDS:
+            if EX.outer_parenthesized(text):
+                if EX.load_time_constant(text):
+                    continue  # il caricamento la valuta in una costante
+                c = EX.compile_expression(text, variables)
+                if not c.ok:
+                    hint = f" {c.problem.hint}." if c.problem.hint else ""
+                    bag.add(where, f"Espressione non valida per '{dotted}': "
+                            f"{c.problem.reason}.{hint}",
+                            code="engine-expr", prefer_value=True)
+                continue
+            # Senza parentesi esterne la stringa passa prima dalla
+            # valutazione al caricamento: `-(90/2)` diventa un numero, e
+            # `(10/2)/10` e' la meta' valutata, un altro errore del motore.
+            if not isinstance(EX.load_time_value(text), str):
+                continue
+            proposta = EX.half_evaluated_proposal(text)
+            if proposta is not None:
+                bag.add(where, f"'{dotted}': '{text}' sta per meta' fuori "
+                        "dalle parentesi esterne, e il caricamento ne "
+                        "valuterebbe solo un pezzo: e' un errore dell'engine. "
+                        f"Scrivila tutta fra parentesi, {proposta}.",
+                        code="engine-expr", prefer_value=True,
+                        data={"fix": {"kind": "rename-value", "new": proposta}})
+                continue
+            c = EX.compile_expression(text, variables)
+            if c.ok:
+                bag.add(where, f"'{dotted}': un'espressione si scrive fra "
+                        f"parentesi — es. ({text.strip()}).",
+                        code="engine-expr", prefer_value=True,
+                        data={"fix": {"kind": "rename-value",
+                                      "new": f"({text.strip()})"}})
+            continue
+        if not EX.outer_parenthesized(text):
+            continue
+        names = EX.names_in(text)
+        if not (names & declared) and EX.load_time_constant(text):
+            continue  # costante valutata al caricamento, vale ovunque
+        hint = EX.EXPRESSION_REFUSALS.get(dotted, EX.GENERIC_REFUSAL)
+        bag.add(where, f"'{dotted}': qui un'espressione non vale, il campo "
+                f"vuole un numero o un envelope — {hint}.",
+                code="engine-expr-refused", prefer_value=True)
 
 
 # ---------------------------------------------------------------------------
@@ -2067,7 +2510,8 @@ def _rd_compact(bag: Bag, path: KeyPath, compact: Any) -> None:
     _rd_points(bag, path + (0,), compact[0])
 
 
-def _check_read_direction(bag: Bag, bpath: KeyPath, grain: Dict[str, Any]) -> None:
+def _check_read_direction(bag: Bag, bpath: KeyPath, grain: Dict[str, Any],
+                          variables: Tuple[str, ...] = ()) -> None:
     """Le tre regole che scendono dalla natura della chiave (PGE #207).
 
     Il dominio e' l'**insieme** {-1, +1}, ``step`` e' l'interpolazione imposta
@@ -2088,6 +2532,13 @@ def _check_read_direction(bag: Bag, bpath: KeyPath, grain: Dict[str, Any]) -> No
                 code="read-direction-coppia")
     raw = grain["read_direction"]
     if raw is None or _generator_node(raw):
+        return
+    # un'espressione del motore (PGE #313): il verso a ogni grano lo da' la
+    # mappa, e la dice ``_check_engine_expressions``. Una parola (``reverse``)
+    # resta l'errore del valore.
+    if isinstance(raw, str) and (
+            EX.outer_parenthesized(raw)
+            or EX.compile_expression(raw, variables).ok):
         return
     if isinstance(raw, dict):
         _rd_interp(bag, rpath + ("type",), raw.get("type"))

@@ -145,6 +145,19 @@ PARAMS: Dict[str, ParamInfo] = {
     "voices.num_voices": ParamInfo(1, 256, 1, "voci", "Numero di voci."),
     "voices.scatter": ParamInfo(0, 1, 0.0, "0..1",
         "0 = voci sincrone sullo stesso IOT, 1 = IOT indipendenti."),
+    "grain.iot": ParamInfo(1 / OUTPUT_SR, 100, None, "s",
+        "Attesa fino al grano successivo (PGE #311): il terzo modo accanto a "
+        "`density` e `fill_factor`, scelto per presenza della chiave. Con lei "
+        "la densita' non si decide, emerge dagli onset. Da un campione a "
+        "100 s, in **secondi**: con una `grain.duration_unit` dichiarata il "
+        "valore vive in quell'unita' e si converte prima del confronto. "
+        "Esclusiva con `density`, `fill_factor` e `distribution`: insieme "
+        "sono un errore dell'engine, non una priorita'."),
+    "pointer.position": ParamInfo(0, 1, None, "frazione della finestra",
+        "Posizione di lettura scritta (PGE #312), da 0 a 1 della finestra "
+        "attiva: la finestra di loop se c'e', altrimenti il file. Fuori da "
+        "0–1 **rientra a capo** (`1.25` e' `0.25`): non e' un errore. Sta al "
+        "posto di `speed_ratio` e `start`, e `loop_unit` non la riscala."),
     "onset": ParamInfo(0, None, None, "s", "Tempo di inizio assoluto dello stream."),
     "duration": ParamInfo(0, None, None, "s", "Durata dello stream."),
 }
@@ -223,6 +236,8 @@ ORIGINS: Dict[str, Origin] = {
     "pointer.loop_dur": _reg("loop_dur"),
     "voices.num_voices": _reg("num_voices"),
     "voices.scatter": _reg("scatter"),
+    "grain.iot": _reg("grain_iot"),
+    "pointer.position": _reg("pointer_position"),
     "pointer.start": Origin("studio", note=
         "``pointer_start`` e' ``is_smart=False``: valore raw, l'engine non gli "
         "applica bounds. Il minimo a 0 e' nostro — una posizione in un file "
@@ -568,3 +583,108 @@ def split_axis_key(
             j = candidates[0]
             return ".".join(segs[:j]), tuple(segs[j:]), None
     return segs[0], tuple(segs[1:]), None
+
+
+# ---------------------------------------------------------------------------
+# I tre modi della densita' e le due leggi di moto del puntatore (PGE #311,
+# #312): esclusivita' per **presenza** della chiave, non priorita'.
+
+#: Le chiavi che non convivono con ``grain.iot``
+#: (``pge.controllers.density_controller.IOT_EXCLUSIVE_KEYS``): anche
+#: ``distribution: 0``, anche una ``grain.iot:`` lasciata vuota.
+IOT_EXCLUSIVE_KEYS = ("density", "fill_factor", "distribution")
+
+#: Le chiavi di ``pointer:`` che non convivono con ``position``
+#: (``pge.controllers.pointer_controller.POSITION_EXCLUSIVE_KEYS``).
+POSITION_EXCLUSIVE_KEYS = ("speed_ratio", "start")
+
+#: I path i cui bounds **avvolgono** invece di tagliare
+#: (``WRAPPING_PARAMETERS`` del motore, ``('pointer_position',)``): un valore
+#: finito fuori dai bounds rientra a capo ed e' valido; un non-finito resta un
+#: errore di bounds.
+WRAPPING_PATHS = frozenset({"pointer.position"})
+
+
+# ---------------------------------------------------------------------------
+# ``maps:`` (PGE #308, #310, #313): le mappe iterate di uno stream.
+
+#: I tipi del catalogo (``pge.maps.catalog.MAP_TYPES``), piu' ``custom``.
+MAP_TYPES = ("logistic", "tent", "sine", "cubic", "henon", "circle")
+MAP_TYPE_CUSTOM = "custom"
+MAP_TYPE_VALUES = MAP_TYPES + (MAP_TYPE_CUSTOM,)
+
+#: Le chiavi di una mappa (``pge.maps.map_set.MAP_KEYS``).
+MAP_KEYS = ("type", "r", "clock", "iterate", "x0", "transient", "y0", "x", "y")
+
+#: ``clock: grain``: un passo per grano, il default.
+MAP_CLOCK_GRAIN = "grain"
+
+#: Tetti al caricamento (``MAP_ITERATE_MAX``, ``MAP_TRANSIENT_MAX``) e il
+#: transitorio di default (``MAP_TRANSIENT_DEFAULT``).
+MAP_ITERATE_MAX = 40
+MAP_TRANSIENT_MAX = 100_000
+MAP_TRANSIENT_DEFAULT = 300
+
+#: Lo stato iniziale di una ``custom`` (``MAP_CUSTOM_X0``/``MAP_CUSTOM_Y0``).
+MAP_CUSTOM_X0 = 0.1
+MAP_CUSTOM_Y0 = 0.1
+
+
+@dataclass(frozen=True)
+class MapKindInfo:
+    """Cio' che il catalogo dichiara di un tipo (``MAP_KINDS``)."""
+    x0: float
+    r_range: Tuple[float, float]
+    value_range: Tuple[float, float]
+    variables: int = 1
+    y0: float = 0.0
+    y_range: Optional[Tuple[float, float]] = None
+    sin_based: bool = False
+
+
+MAP_KINDS: Dict[str, MapKindInfo] = {
+    "logistic": MapKindInfo(0.3, (2.5, 4.0), (0.0, 1.0)),
+    "tent": MapKindInfo(0.3, (2.5, 3.999), (0.0, 1.0)),
+    "sine": MapKindInfo(0.1, (0.0, 4.0), (-1.0, 1.0), sin_based=True),
+    "cubic": MapKindInfo(0.3, (1.5, 3.0), (-1.2, 1.2)),
+    "henon": MapKindInfo(0.1, (0.8, 1.4), (-1.3, 1.4), variables=2, y0=0.1,
+                         y_range=(-0.39, 0.42)),
+    "circle": MapKindInfo(0.2, (0.0, 1.0), (0.0, 1.0), sin_based=True),
+}
+
+#: Un nome di mappa: lettere, cifre e ``_``, non una cifra in testa.
+MAP_NAME_PATTERN = r"[A-Za-z_][A-Za-z_0-9]*\Z"
+
+
+def reserved_map_names() -> frozenset:
+    """Nomi che una mappa non puo' prendere (``RESERVED_MAP_NAMES``): in
+    un'espressione sono gia' una funzione, una costante, il tempo, o una
+    variabile dell'equazione di una mappa."""
+    from . import engine_expr as EX
+    return (frozenset(EX.FUNCTIONS) | frozenset(EX.CONSTANTS)
+            | frozenset({EX.TIME_NAME}) | frozenset(EX.MAP_EQUATION_VARIABLES))
+
+
+def map_kind_doc(name: str) -> Optional[str]:
+    """Una riga di hover per un tipo del catalogo."""
+    if name == MAP_TYPE_CUSTOM:
+        return ("**custom** — l'equazione si scrive nello YAML: `x:` "
+                "(obbligatoria) e `y:` (seconda variabile, facoltativa), nel "
+                "linguaggio delle espressioni con le variabili `x`, `y`, `r`, "
+                "senza le parentesi esterne. `x0`/`y0` di default "
+                f"{MAP_CUSTOM_X0:g}; `r` serve solo se un'equazione lo legge. "
+                "L'intervallo del valore dipende dall'equazione.")
+    k = MAP_KINDS.get(name)
+    if k is None:
+        return None
+    lo, hi = k.value_range
+    rlo, rhi = k.r_range
+    text = (f"**{name}** — valore in [{lo:g}, {hi:g}], `r` in "
+            f"[{rlo:g}, {rhi:g}], `x0` {k.x0:g}.")
+    if k.variables == 2 and k.y_range:
+        text += (f" Due variabili: la seconda si legge come `<nome>.y`, in "
+                 f"[{k.y_range[0]:g}, {k.y_range[1]:g}], `y0` {k.y0:g}.")
+    if k.sin_based:
+        text += (" Passa da `sin`: fra due macchine i grani possono "
+                 "divergere.")
+    return text

@@ -92,6 +92,19 @@ Language server (LSP) per il **linguaggio di granulazione** degli
 - **la banda dei `_range`** (PGE v9): `distribution_mode` (`uniform` |
   `gaussian`) e `range_anchor` (`center` | `min`) a vocabolario chiuso — e
   `distribution_mode` non e' piu' scambiata per `distribution`;
+- **mappe caotiche** (PGE #307): `maps:` dentro `base:` (nomi liberi, ogni
+  mappa a vocabolario chiuso, i sei tipi del catalogo piu' `custom` con le sue
+  equazioni `x:`/`y:`), con le regole che il motore applica al caricamento —
+  `clock` e `iterate` insieme, i tetti di `iterate`/`transient`/`clock`, `y0`
+  su una mappa a una variabile, un tipo di catalogo con un'equazione accanto;
+  le **espressioni del motore** (`(0.02 + 0.08*m1)`) compilate con la stessa
+  grammatica dell'interprete, sui nomi dello stream (mappe, `m1.y`, `t`),
+  valide sul valore base dei quindici campi in cui il motore le accetta e un
+  errore dove le rifiuta; non sono nodi-expr dello studio, e hanno hover e
+  token propri. `grain.iot` come terzo modo della densita' (segue
+  `duration_unit`, esclusivo con `density`/`fill_factor`/`distribution`
+  anche attraverso il merge e gli assi) e `pointer.position`, che rientra a
+  capo invece di uscire dai bounds;
 - blocco pitch unit-driven, finestre sconosciute, `reverse: true`,
   `loop_end <= loop_start`, `curve` con `type: step`, tempi di banda fuori [0,1]...
 

@@ -17,7 +17,10 @@ on:
 jobs:
   server:
     name: server (py${{ matrix.python }})
-    runs-on: ubuntu-latest
+    # Fissato a 24.04: `ubuntu-latest` e' passato a 26.04, dove setup-python
+    # non ha piu' il 3.9 («version '3.9' ... was not found for Ubuntu 26.04»),
+    # e il job della versione minima supportata non partiva.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
